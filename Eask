@@ -20,6 +20,10 @@
 (depends-on "org"   "9.6")
 (depends-on "org-roam" "2.2")
 (depends-on "org-ql" "0.7")
+(depends-on "mcp-server-lib" "0.1")
 
 (development
- (depends-on "ert"))
+ (depends-on "ert")
+ (depends-on "package-lint")
+ (depends-on "relint")
+ (depends-on "undercover"))

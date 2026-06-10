@@ -5,8 +5,8 @@
 ;; Author: John Wiegley <johnw@gnu.org>
 ;; Created: 14 May 2026
 ;; Version: 0.1.0
-;; Package-Requires: ((emacs "29.1") (org "9.6") (org-roam "2.2") (org-ql "0.7"))
-;; Keywords: org wiki llm mcp
+;; Package-Requires: ((emacs "29.1") (org "9.6") (org-roam "2.2") (org-ql "0.7") (mcp-server-lib "0.1"))
+;; Keywords: outlines hypermedia
 ;; URL: https://github.com/jwiegley/dot-emacs
 
 ;; This file is distributed under the BSD 3-clause license; see the
@@ -56,17 +56,20 @@
 (require 'cl-lib)
 (require 'org)
 (require 'org-id)
+(require 'seq)
 (require 'subr-x)
 
 ;; org-ql is required at runtime for the search predicate
 (declare-function org-ql-select "org-ql")
 (declare-function org-roam-backlinks-get "org-roam-mode")
 (declare-function org-roam-node-from-id "org-roam-node")
-(declare-function org-roam-backlink-source-node "org-roam-mode")
-(declare-function org-roam-node-id "org-roam-node")
-(declare-function org-roam-node-title "org-roam-node")
-(declare-function org-ql-semantic-files "org-ql-semantic")
-(declare-function org-hash-property "org-hash")
+;; cl-defstruct accessors: check-declare cannot resolve them, so only
+;; verify the defining file exists (FILEONLY = t).
+(declare-function org-roam-backlink-source-node "org-roam-mode" (backlink) t)
+(declare-function org-roam-node-id "org-roam-node" (node) t)
+(declare-function org-roam-node-title "org-roam-node" (node) t)
+(declare-function org-ql-semantic-files "ext:org-ql-semantic")
+(declare-function org-hash-property "ext:org-hash")
 
 (defgroup org-wiki nil
   "Org-native LLM Wiki — read-only spike."
@@ -103,7 +106,8 @@ A node is a wiki node only if it lives under this directory AND has a
 
 ;;;###autoload
 (defun org-wiki-node-p (&optional pom)
-  "Return t if the entry at POM (point-or-marker; defaults to point) is a wiki node.
+  "Return t if the entry at POM is a wiki node.
+POM is a point or marker, defaulting to point.
 
 Identity is property-only per the architecture doc §2.1: a wiki node is
 any Org entry that has a `:WIKI_KIND:' property.  The canonical

@@ -4,12 +4,15 @@
 
 ;; Author: John Wiegley <johnw@gnu.org>
 ;; Created: 14 May 2026
-;; Version: 0.1.0
-;; Package-Requires: ((emacs "29.1") (org-wiki "0.1") (mcp-server-lib "0.1"))
-;; Keywords: org wiki llm mcp
+;; Keywords: outlines hypermedia
+;; URL: https://github.com/jwiegley/dot-emacs
 
 ;; This file is distributed under the BSD 3-clause license; see the
 ;; LICENSE.md file in this repository for the full text.
+;;
+;; This file is part of the org-wiki package; the package metadata
+;; (Version, Package-Requires) lives in org-wiki.el.  At runtime this
+;; file additionally needs mcp-server-lib.
 
 ;;; Commentary:
 
@@ -118,7 +121,7 @@ doc introduced — see commentary above."
 ;;;; --- Tool handlers (MCP-shaped wrappers around org-wiki API) ----
 
 (defun org-wiki-mcp--search-tool (query k)
-  "Semantic search over wiki nodes.
+  "Search wiki nodes for QUERY, returning up to K results.
 
 MCP Parameters:
   query - search query string

@@ -26,6 +26,11 @@
 (require 'org)
 (require 'org-id)
 
+;; Bound via `let' in the fixture macro; org-roam itself is loaded only
+;; in the backlinks test.
+(defvar org-roam-directory)
+(declare-function org-ql-select "org-ql")
+
 ;; Avoid org-roam-db actually trying to open a database file during tests.
 ;; We require org-roam *only* in the backlinks test and skip it cleanly
 ;; when it isn't usable.
