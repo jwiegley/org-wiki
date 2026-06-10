@@ -1,0 +1,54 @@
+# Pre-commit gates for org-wiki.  Every check runs in the Nix dev
+# shell so the toolchain is identical to CI and `nix flake check'.
+# Install with: lefthook install
+#
+# All checks run in parallel except bench-check, which runs alone
+# first: a 5% CPU-time regression gate needs the machine to itself —
+# run concurrently with the other jobs, cache contention alone
+# inflates the numbers well past the tolerance.
+#
+# (The benchmarks are also sensitive to TMPDIR depth, because
+# find-file-noselect pays a per-path-component file-truename cost; a
+# nested `nix develop --command lefthook run pre-commit` adds a
+# component and shows phantom ~15% regressions on the file-heavy
+# benchmarks.  The real hook context — git commit → lefthook → nix
+# develop — matches the baseline.  Run `lefthook run pre-commit`
+# directly, not from inside a dev shell, when testing hooks.)
+
+pre-commit:
+  jobs:
+    # No glob: the gate's own inputs (baselines/bench.tsv,
+    # scripts/bench-check.sh, Makefile) must re-trigger it, otherwise a
+    # commit that only weakens the baseline or tolerance bypasses the
+    # gate — and bench has no flake-check backstop by design.
+    - name: bench-check
+      run: nix develop --command make bench-check
+    - group:
+        parallel: true
+        jobs:
+          - name: format-check
+            glob: "*.{el,nix,sh}"
+            run: nix develop --command make format-check
+          - name: compile
+            glob: "*.el"
+            run: nix develop --command make build
+          - name: lint
+            glob: "*.el"
+            run: nix develop --command make lint
+          - name: test
+            glob: "*.el"
+            run: nix develop --command make test
+          # No glob, for the same reason as bench-check: changes to
+          # baselines/coverage.txt or scripts/coverage-check.sh must
+          # re-run the gate (flake-check backstops this one, but keep
+          # the defense local too).
+          - name: coverage-check
+            run: nix develop --command make coverage-check
+          - name: fuzz
+            glob: "*.el"
+            run: nix develop --command make fuzz
+          - name: nix-build
+            glob: "*.{el,nix}"
+            run: nix build --no-link --print-build-logs
+          - name: flake-check
+            run: nix flake check --no-warn-dirty
