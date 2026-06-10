@@ -1,0 +1,8 @@
+*.elc
+*~
+.eask/
+/coverage/
+/bench/
+/dist/
+/result
+/result-*
