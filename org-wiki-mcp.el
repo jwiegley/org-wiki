@@ -8,6 +8,9 @@
 ;; Package-Requires: ((emacs "29.1") (org-wiki "0.1") (mcp-server-lib "0.1"))
 ;; Keywords: org wiki llm mcp
 
+;; This file is distributed under the BSD 3-clause license; see the
+;; LICENSE.md file in this repository for the full text.
+
 ;;; Commentary:
 
 ;; Registers the read-only org-wiki tools against the running

@@ -9,10 +9,8 @@
 ;; Keywords: org wiki llm mcp
 ;; URL: https://github.com/jwiegley/dot-emacs
 
-;; This program is free software; you can redistribute it and/or
-;; modify it under the terms of the GNU General Public License as
-;; published by the Free Software Foundation, either version 3 of the
-;; License, or (at your option) any later version.
+;; This file is distributed under the BSD 3-clause license; see the
+;; LICENSE.md file in this repository for the full text.
 
 ;;; Commentary:
 
