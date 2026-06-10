@@ -131,24 +131,24 @@ not be classified as a wiki node.
 (ert-deftest org-wiki-test-node-p-true-on-wiki-node ()
   "A heading with :WIKI_KIND: under wiki root is a wiki node."
   (org-wiki-test-with-fixtures
-    (let ((file (org-wiki-test--write-fixture
-                 "concepts/202605131012-content-addressed-storage.org"
-                 org-wiki-test--concept-node)))
-      (with-current-buffer (find-file-noselect file)
-        (goto-char (point-min))
-        (re-search-forward "^\\* Content")
-        (should (org-wiki-node-p))))))
+   (let ((file (org-wiki-test--write-fixture
+                "concepts/202605131012-content-addressed-storage.org"
+                org-wiki-test--concept-node)))
+     (with-current-buffer (find-file-noselect file)
+       (goto-char (point-min))
+       (re-search-forward "^\\* Content")
+       (should (org-wiki-node-p))))))
 
 (ert-deftest org-wiki-test-node-p-false-without-wiki-kind ()
   "A heading without :WIKI_KIND: is not a wiki node, even under wiki root."
   (org-wiki-test-with-fixtures
-    (let ((file (org-wiki-test--write-fixture
-                 "concepts/202605131012-random.org"
-                 org-wiki-test--non-wiki-node)))
-      (with-current-buffer (find-file-noselect file)
-        (goto-char (point-min))
-        (re-search-forward "^\\* A Random")
-        (should-not (org-wiki-node-p))))))
+   (let ((file (org-wiki-test--write-fixture
+                "concepts/202605131012-random.org"
+                org-wiki-test--non-wiki-node)))
+     (with-current-buffer (find-file-noselect file)
+       (goto-char (point-min))
+       (re-search-forward "^\\* A Random")
+       (should-not (org-wiki-node-p))))))
 
 (ert-deftest org-wiki-test-node-p-true-outside-wiki-root ()
   "A heading with :WIKI_KIND: outside wiki root IS a wiki node.
@@ -158,113 +158,113 @@ convention, not part of identity.  Such a node is still searchable
 and readable; it just isn't writable — see
 `org-wiki-test-writable-p-false-outside-wiki-root'."
   (org-wiki-test-with-fixtures
-    (let* ((other-root (make-temp-file "org-wiki-other-" t))
-           (file (expand-file-name "outside.org" other-root)))
-      (unwind-protect
-          (progn
-            (with-temp-file file (insert org-wiki-test--concept-node))
-            (with-current-buffer (find-file-noselect file)
-              (goto-char (point-min))
-              (re-search-forward "^\\* Content")
-              (should (org-wiki-node-p))))
-        (delete-directory other-root t)))))
+   (let* ((other-root (make-temp-file "org-wiki-other-" t))
+          (file (expand-file-name "outside.org" other-root)))
+     (unwind-protect
+         (progn
+           (with-temp-file file (insert org-wiki-test--concept-node))
+           (with-current-buffer (find-file-noselect file)
+             (goto-char (point-min))
+             (re-search-forward "^\\* Content")
+             (should (org-wiki-node-p))))
+       (delete-directory other-root t)))))
 
 (ert-deftest org-wiki-test-writable-p-false-outside-wiki-root ()
   "A heading with :WIKI_KIND: outside wiki root is NOT writable.
 
 The write-allowlist (§3.5) is path-bounded even when identity is not."
   (org-wiki-test-with-fixtures
-    (let* ((other-root (make-temp-file "org-wiki-other-" t))
-           (file (expand-file-name "outside.org" other-root)))
-      (unwind-protect
-          (progn
-            (with-temp-file file (insert org-wiki-test--concept-node))
-            (with-current-buffer (find-file-noselect file)
-              (goto-char (point-min))
-              (re-search-forward "^\\* Content")
-              (should (org-wiki-node-p))         ; reads OK
-              (should-not (org-wiki-writable-p)))) ; writes NOT OK
-        (delete-directory other-root t)))))
+   (let* ((other-root (make-temp-file "org-wiki-other-" t))
+          (file (expand-file-name "outside.org" other-root)))
+     (unwind-protect
+         (progn
+           (with-temp-file file (insert org-wiki-test--concept-node))
+           (with-current-buffer (find-file-noselect file)
+             (goto-char (point-min))
+             (re-search-forward "^\\* Content")
+             (should (org-wiki-node-p))         ; reads OK
+             (should-not (org-wiki-writable-p)))) ; writes NOT OK
+       (delete-directory other-root t)))))
 
 ;;;; --- Search -----------------------------------------------------
 
 (ert-deftest org-wiki-test-search-finds-wiki-nodes-only ()
   "Search returns wiki nodes only — non-wiki files in the tree are filtered."
   (org-wiki-test-with-fixtures
-    (org-wiki-test--write-fixture
-     "concepts/202605131012-content-addressed-storage.org"
-     org-wiki-test--concept-node)
-    (org-wiki-test--write-fixture
-     "entities/202605131013-andrej-karpathy.org"
-     org-wiki-test--entity-node)
-    (org-wiki-test--write-fixture
-     "concepts/202605131014-random.org"
-     org-wiki-test--non-wiki-node)
-    (let ((results (org-wiki-search "Content" 10)))
-      (should (cl-every (lambda (r) (plist-get r :kind)) results))
-      ;; The non-wiki node must be filtered out
-      (should-not
-       (cl-some (lambda (r)
-                  (string= (plist-get r :id)
-                           "bbbbbbbb-1111-2222-3333-444444444444"))
-                results)))))
+   (org-wiki-test--write-fixture
+    "concepts/202605131012-content-addressed-storage.org"
+    org-wiki-test--concept-node)
+   (org-wiki-test--write-fixture
+    "entities/202605131013-andrej-karpathy.org"
+    org-wiki-test--entity-node)
+   (org-wiki-test--write-fixture
+    "concepts/202605131014-random.org"
+    org-wiki-test--non-wiki-node)
+   (let ((results (org-wiki-search "Content" 10)))
+     (should (cl-every (lambda (r) (plist-get r :kind)) results))
+     ;; The non-wiki node must be filtered out
+     (should-not
+      (cl-some (lambda (r)
+                 (string= (plist-get r :id)
+                          "bbbbbbbb-1111-2222-3333-444444444444"))
+               results)))))
 
 (ert-deftest org-wiki-test-search-respects-k ()
   "Search returns at most k results."
   (org-wiki-test-with-fixtures
-    (org-wiki-test--write-fixture
-     "concepts/202605131012-content-addressed-storage.org"
-     org-wiki-test--concept-node)
-    (org-wiki-test--write-fixture
-     "entities/202605131013-andrej-karpathy.org"
-     org-wiki-test--entity-node)
-    (let ((results (org-wiki-search "" 1)))
-      (should (<= (length results) 1)))))
+   (org-wiki-test--write-fixture
+    "concepts/202605131012-content-addressed-storage.org"
+    org-wiki-test--concept-node)
+   (org-wiki-test--write-fixture
+    "entities/202605131013-andrej-karpathy.org"
+    org-wiki-test--entity-node)
+   (let ((results (org-wiki-search "" 1)))
+     (should (<= (length results) 1)))))
 
 ;;;; --- Reading ----------------------------------------------------
 
 (ert-deftest org-wiki-test-read-node-returns-body ()
   "Reading a known node returns its body text."
   (org-wiki-test-with-fixtures
-    (let ((file (org-wiki-test--write-fixture
-                 "concepts/202605131012-content-addressed-storage.org"
-                 org-wiki-test--concept-node)))
-      ;; Register the ID in org-id-locations
-      (puthash "4f1c3b8e-9ad2-4b7e-9d04-1a5e6f7c8b91" file org-id-locations)
-      (let ((body (org-wiki-read-node "4f1c3b8e-9ad2-4b7e-9d04-1a5e6f7c8b91")))
-        (should (stringp body))
-        (should (string-match-p "Content addressing" body))))))
+   (let ((file (org-wiki-test--write-fixture
+                "concepts/202605131012-content-addressed-storage.org"
+                org-wiki-test--concept-node)))
+     ;; Register the ID in org-id-locations
+     (puthash "4f1c3b8e-9ad2-4b7e-9d04-1a5e6f7c8b91" file org-id-locations)
+     (let ((body (org-wiki-read-node "4f1c3b8e-9ad2-4b7e-9d04-1a5e6f7c8b91")))
+       (should (stringp body))
+       (should (string-match-p "Content addressing" body))))))
 
 (ert-deftest org-wiki-test-read-node-rejects-unknown-id ()
   "Reading an unknown ID signals org-wiki-error."
   (org-wiki-test-with-fixtures
-    (should-error
-     (org-wiki-read-node "00000000-0000-0000-0000-000000000000")
-     :type 'org-wiki-error)))
+   (should-error
+    (org-wiki-read-node "00000000-0000-0000-0000-000000000000")
+    :type 'org-wiki-error)))
 
 (ert-deftest org-wiki-test-read-node-rejects-non-wiki-node ()
   "Reading a node that exists but lacks :WIKI_KIND: signals org-wiki-error."
   (org-wiki-test-with-fixtures
-    (let ((file (org-wiki-test--write-fixture
-                 "concepts/202605131014-random.org"
-                 org-wiki-test--non-wiki-node)))
-      (puthash "bbbbbbbb-1111-2222-3333-444444444444" file org-id-locations)
-      (should-error
-       (org-wiki-read-node "bbbbbbbb-1111-2222-3333-444444444444")
-       :type 'org-wiki-error))))
+   (let ((file (org-wiki-test--write-fixture
+                "concepts/202605131014-random.org"
+                org-wiki-test--non-wiki-node)))
+     (puthash "bbbbbbbb-1111-2222-3333-444444444444" file org-id-locations)
+     (should-error
+      (org-wiki-read-node "bbbbbbbb-1111-2222-3333-444444444444")
+      :type 'org-wiki-error))))
 
 ;;;; --- Node metadata ----------------------------------------------
 
 (ert-deftest org-wiki-test-node-metadata-returns-properties ()
   "Metadata returns the property drawer as a plist."
   (org-wiki-test-with-fixtures
-    (let ((file (org-wiki-test--write-fixture
-                 "concepts/202605131012-content-addressed-storage.org"
-                 org-wiki-test--concept-node)))
-      (puthash "4f1c3b8e-9ad2-4b7e-9d04-1a5e6f7c8b91" file org-id-locations)
-      (let ((meta (org-wiki-node-metadata "4f1c3b8e-9ad2-4b7e-9d04-1a5e6f7c8b91")))
-        (should (plist-get meta :id))
-        (should (string= (plist-get meta :wiki_kind) "Concept"))))))
+   (let ((file (org-wiki-test--write-fixture
+                "concepts/202605131012-content-addressed-storage.org"
+                org-wiki-test--concept-node)))
+     (puthash "4f1c3b8e-9ad2-4b7e-9d04-1a5e6f7c8b91" file org-id-locations)
+     (let ((meta (org-wiki-node-metadata "4f1c3b8e-9ad2-4b7e-9d04-1a5e6f7c8b91")))
+       (should (plist-get meta :id))
+       (should (string= (plist-get meta :wiki_kind) "Concept"))))))
 
 ;;;; --- The org-ql property predicate ------------------------------
 
@@ -272,18 +272,18 @@ The write-allowlist (§3.5) is path-bounded even when identity is not."
   "Verify that org-ql's (property \"WIKI_KIND\") matches by existence,
 not by value.  This is the load-bearing claim from §2.1 of the doc."
   (org-wiki-test-with-fixtures
-    (let ((file (org-wiki-test--write-fixture
-                 "concepts/202605131012-content-addressed-storage.org"
-                 org-wiki-test--concept-node))
-          (random-file (org-wiki-test--write-fixture
-                        "concepts/202605131014-random.org"
-                        org-wiki-test--non-wiki-node)))
-      (require 'org-ql)
-      (let ((matches (org-ql-select (list file random-file)
-                       '(property "WIKI_KIND")
-                       :action (lambda () (org-entry-get nil "ID")))))
-        (should (member "4f1c3b8e-9ad2-4b7e-9d04-1a5e6f7c8b91" matches))
-        (should-not (member "bbbbbbbb-1111-2222-3333-444444444444" matches))))))
+   (let ((file (org-wiki-test--write-fixture
+                "concepts/202605131012-content-addressed-storage.org"
+                org-wiki-test--concept-node))
+         (random-file (org-wiki-test--write-fixture
+                       "concepts/202605131014-random.org"
+                       org-wiki-test--non-wiki-node)))
+     (require 'org-ql)
+     (let ((matches (org-ql-select (list file random-file)
+                                   '(property "WIKI_KIND")
+                                   :action (lambda () (org-entry-get nil "ID")))))
+       (should (member "4f1c3b8e-9ad2-4b7e-9d04-1a5e6f7c8b91" matches))
+       (should-not (member "bbbbbbbb-1111-2222-3333-444444444444" matches))))))
 
 ;;;; --- KEY EMPIRICAL FINDING: error-class catch-up ----------------
 

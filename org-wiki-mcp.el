@@ -88,8 +88,8 @@ Option α is the recommended default."
 ;; `org-wiki-test-tool-error-survives-rewrap-pattern'.
 
 (define-error 'org-wiki-tool-error
-  "Wiki MCP tool error"
-  'mcp-server-lib-tool-error)
+              "Wiki MCP tool error"
+              'mcp-server-lib-tool-error)
 
 (defun org-wiki-mcp--throw (alist)
   "Signal a structured tool error with ALIST encoded as JSON.

@@ -196,12 +196,12 @@ otherwise it falls back to a string match against `org-ql''s
             all-files))
          (results
           (org-ql-select candidate-files
-            (if semantic-available
-                `(and (property "WIKI_KIND") (semantic ,query))
-              `(and (property "WIKI_KIND")
-                    (or (heading ,query)
-                        (regexp ,(regexp-quote query)))))
-            :action #'org-wiki--node-at-point-summary)))
+                         (if semantic-available
+                             `(and (property "WIKI_KIND") (semantic ,query))
+                           `(and (property "WIKI_KIND")
+                                 (or (heading ,query)
+                                     (regexp ,(regexp-quote query)))))
+                         :action #'org-wiki--node-at-point-summary)))
     (seq-take results k)))
 
 ;;;###autoload
