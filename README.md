@@ -174,23 +174,16 @@ is built.
 
 ## How to run the tests
 
+The dev shell provides an Emacs with every dependency already on the
+load path:
+
 ```sh
-cd /Users/johnw/src/dot-emacs/lisp/org-wiki
-
-# Use the user's full Emacs install (has org-roam, org-ql, vulpea, etc.)
-EMACS=/nix/store/<hash>-emacs-mac-macport-with-packages-30.2.50/bin/emacs
-
-"$EMACS" --batch \
-  -L . \
-  -L ../mcp-server-lib \
-  -L ../org-hash \
-  -l org-wiki.el \
-  -l org-wiki-mcp.el \
-  -l org-wiki-test.el \
-  -f ert-run-tests-batch-and-exit
+nix develop --command make test
 ```
 
-Expected output: `Ran 18 tests, 18 results as expected, 0 unexpected`.
+Expected output: `Ran 19 tests, 18 results as expected, 0 unexpected,
+1 skipped`. (The `org-hash` test is skipped unless that package is
+present; it is optional and not part of the pinned toolchain.)
 
 ## How to use it interactively
 
@@ -240,3 +233,63 @@ in the read-only slice) remain 🟡/🔴 pending a mutation spike.
 3. Build the mutation slice — *only after* the read-only slice has been
    exercised long enough that the user has a concrete sense of what
    they actually need.
+
+## Development
+
+Every check runs through the Makefile, and the Makefile expects the
+Nix dev shell, so there is exactly one toolchain to argue with:
+
+```sh
+nix develop          # Emacs + org-roam/org-ql/mcp-server-lib, eask, lefthook, shfmt, nixfmt
+make check           # the full gate
+```
+
+| Target              | What it does                                                        |
+|---------------------|---------------------------------------------------------------------|
+| `make build`        | Byte-compile with all warnings enabled and treated as errors        |
+| `make test`         | Run the ERT suite                                                   |
+| `make lint`         | checkdoc, package-lint, relint, and `check-declare`                 |
+| `make format`       | Canonical indentation for Elisp; `shfmt` and `nixfmt` for the rest  |
+| `make format-check` | Same, but verify only — non-zero exit on any diff                   |
+| `make coverage`     | ERT suite under `undercover`, lcov report in `coverage/lcov.info`   |
+| `make coverage-check` | Fail if line coverage drops below `baselines/coverage.txt`        |
+| `make coverage-html` | Render the lcov report with `genhtml`                              |
+| `make bench`        | Calibrated CPU-time benchmarks, TSV report in `bench/current.tsv`   |
+| `make bench-check`  | Fail if any benchmark regresses more than 5% against the baseline   |
+| `make fuzz`         | Seeded random-input harness against the public API and MCP handlers |
+| `make check`        | All of the above, in dependency order                               |
+
+A few notes on the corners of this:
+
+- **Baselines** live in `baselines/`. Coverage is deterministic for a
+  pinned toolchain, so its gate has zero slack. Benchmark numbers are
+  minimum CPU times expressed as a ratio of an in-process calibration
+  loop, so scheduler placement and frequency scaling cancel out
+  instead of producing false regressions; regenerate with `make
+  bench-baseline` when the Emacs toolchain changes. A failed gate
+  re-runs the harness once before failing, since one-off noise does
+  not reproduce but a real regression does.
+- **Fuzzing**: Emacs Lisp has no coverage-guided fuzzer, so
+  `scripts/fuzz.el` is the practical equivalent — a seeded
+  random-input harness that asserts the API's error contract. Set
+  `FUZZ_SEED`/`FUZZ_ITERATIONS` to vary the run.
+- **No sanitizer target**: Elisp is garbage-collected and has no
+  manual memory management, so there is nothing for an ASan/MSan
+  analogue to check.
+- **Docs**: this README is the documentation; there is no separate
+  build step for it.
+
+Pre-commit hooks run all of these in parallel via
+[lefthook](https://github.com/evilmartians/lefthook):
+
+```sh
+nix develop --command lefthook install
+```
+
+GitHub Actions runs `nix flake check` (which executes the same
+Makefile targets in the sandbox), `nix build`, and uploads the
+coverage and benchmark reports as artifacts.
+
+## License
+
+BSD 3-clause; see [LICENSE.md](LICENSE.md).
