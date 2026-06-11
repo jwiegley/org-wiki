@@ -122,6 +122,17 @@ string is unique."
         (org-fold-show-context 'org-goto)
         (recenter)))))
 
+(defun org-wiki--id-at-point ()
+  "Return a wiki node id at point: an id: link, or the enclosing heading.
+Return nil when point is on neither, or when not in an Org buffer."
+  (when (derived-mode-p 'org-mode)
+    (or (let ((ctx (org-element-context)))
+          (and (eq (org-element-type ctx) 'link)
+               (string= (org-element-property :type ctx) "id")
+               (org-element-property :path ctx)))
+        (and (org-entry-get nil "WIKI_KIND")
+             (org-entry-get nil "ID")))))
+
 ;;;; --- Commands ---------------------------------------------------
 
 ;;;###autoload
@@ -149,6 +160,27 @@ service is down.  A slow backend is interruptible with \\[keyboard-quit]."
         (message "org-wiki: no matches for %S" query)
       (let ((node (org-wiki--read (format "Wiki (%s): " query) results)))
         (when node (org-wiki--visit node))))))
+
+;;;###autoload
+(defun org-wiki-backlinks (&optional id)
+  "Visit a node that links to the wiki node ID.
+Interactively, ID defaults to the node at point (an id: link or the
+enclosing wiki heading); with none, prompt for a node."
+  (interactive)
+  (let* ((id (or id (org-wiki--id-at-point)
+                 (plist-get (org-wiki--read "Backlinks to: "
+                                            (org-wiki--all-nodes))
+                            :id))))
+    (unless id (user-error "org-wiki: No node specified"))
+    (let ((links (org-wiki--backlinks id)))
+      (if (null links)
+          (message "org-wiki: no backlinks to %s" id)
+        (let* ((nodes (mapcar (lambda (bl)
+                                (list :id (plist-get bl :from-id)
+                                      :title (plist-get bl :from-title)))
+                              links))
+               (node (org-wiki--read "Backlink: " nodes)))
+          (when node (org-wiki--visit node)))))))
 
 (provide 'org-wiki-commands)
 ;;; org-wiki-commands.el ends here

@@ -106,5 +106,22 @@
        (should (string-match-p "Content-Addressed Storage"
                                (org-get-heading t t t t)))))))
 
+(ert-deftest org-wiki-commands-test-backlinks ()
+  "`org-wiki-backlinks' visits a linking node from the backlink list."
+  (org-wiki-test-with-fixtures
+   (org-wiki-test--write-fixture "concepts/202605131012-cas.org"
+                                 org-wiki-test--concept-node)
+   (org-wiki-test--write-fixture "entities/202605131012-ak.org"
+                                 org-wiki-test--entity-node)
+   (cl-letf (((symbol-function 'org-wiki--backlinks)
+              (lambda (_id)
+                (list (list :from-id "a23b4c5d-6e7f-8901-2345-67890abcdef0"
+                            :from-title "Andrej Karpathy"))))
+             ((symbol-function 'completing-read)
+              (lambda (&rest _) "Andrej Karpathy")))
+     (org-wiki-backlinks "4f1c3b8e-9ad2-4b7e-9d04-1a5e6f7c8b91")
+     (should (string-match-p "Andrej Karpathy"
+                             (org-get-heading t t t t))))))
+
 (provide 'org-wiki-commands-test)
 ;;; org-wiki-commands-test.el ends here
