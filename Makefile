@@ -7,8 +7,8 @@
 EMACS ?= emacs
 BATCH := $(EMACS) -Q --batch -L .
 
-PKG_FILES   := org-wiki.el org-wiki-mcp.el
-TEST_FILES  := org-wiki-test.el
+PKG_FILES   := org-wiki.el org-wiki-mcp.el org-wiki-commands.el
+TEST_FILES  := org-wiki-test.el org-wiki-commands-test.el
 SCRIPT_EL   := $(wildcard scripts/*.el)
 SH_FILES    := $(wildcard scripts/*.sh)
 NIX_FILES   := $(wildcard *.nix)
@@ -27,7 +27,7 @@ build:
 
 .PHONY: test
 test:
-	$(BATCH) -l org-wiki.el -l org-wiki-mcp.el -l $(TEST_FILES) \
+	$(BATCH) $(addprefix -l ,$(PKG_FILES)) $(addprefix -l ,$(TEST_FILES)) \
 	  -f ert-run-tests-batch-and-exit
 
 # --- Lint ------------------------------------------------------------
@@ -77,7 +77,7 @@ coverage:
 	mkdir -p "$$tmpdir/scripts" "$$tmpdir/coverage"; \
 	cp scripts/coverage.el "$$tmpdir/scripts/"; \
 	(cd "$$tmpdir" && UNDERCOVER_FORCE=true $(EMACS) -Q --batch -L . \
-	  -l scripts/coverage.el -l $(TEST_FILES) \
+	  -l scripts/coverage.el $(addprefix -l ,$(TEST_FILES)) \
 	  -f ert-run-tests-batch-and-exit); \
 	cp "$$tmpdir/coverage/lcov.info" coverage/lcov.info
 

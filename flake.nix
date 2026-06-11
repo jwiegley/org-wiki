@@ -62,6 +62,7 @@
             fileset = lib.fileset.unions [
               ./org-wiki.el
               ./org-wiki-mcp.el
+              ./org-wiki-commands.el
             ];
           };
 
@@ -70,7 +71,9 @@
             fileset = lib.fileset.unions [
               ./org-wiki.el
               ./org-wiki-mcp.el
+              ./org-wiki-commands.el
               ./org-wiki-test.el
+              ./org-wiki-commands-test.el
               ./Makefile
               ./flake.nix
               ./scripts

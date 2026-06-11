@@ -9,9 +9,9 @@
 
 (package-file "org-wiki.el")
 
-(files "org-wiki.el" "org-wiki-mcp.el")
+(files "org-wiki.el" "org-wiki-mcp.el" "org-wiki-commands.el")
 
-(script "test" "eask test ert org-wiki-test.el")
+(script "test" "eask test ert org-wiki-test.el org-wiki-commands-test.el")
 
 (source "gnu")
 (source "melpa")
