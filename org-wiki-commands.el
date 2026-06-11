@@ -16,9 +16,8 @@
 ;; without them (plain `completing-read', no preview, no embark menu),
 ;; so the headless MCP Emacs never pulls in UI packages.
 ;;
-;; This file currently holds only the shared candidate layer
-;; (enumerate, read, visit); the interactive commands themselves land
-;; in later changes.
+;; This file holds the shared candidate layer (enumerate, read,
+;; visit) and the interactive commands built on top of it.
 
 ;;; Code:
 
@@ -122,6 +121,16 @@ string is unique."
               (goto-char (plist-get node :point)))))
         (org-fold-show-context 'org-goto)
         (recenter)))))
+
+;;;; --- Commands ---------------------------------------------------
+
+;;;###autoload
+(defun org-wiki-find (&optional other-window)
+  "Pick a wiki node and visit it.
+With prefix arg OTHER-WINDOW, use another window."
+  (interactive "P")
+  (let ((node (org-wiki--read "Wiki node: " (org-wiki--all-nodes))))
+    (when node (org-wiki--visit node other-window))))
 
 (provide 'org-wiki-commands)
 ;;; org-wiki-commands.el ends here

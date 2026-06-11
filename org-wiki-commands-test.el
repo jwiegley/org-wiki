@@ -66,5 +66,16 @@
      (should (string-match-p "Content-Addressed Storage"
                              (org-get-heading t t t t))))))
 
+(ert-deftest org-wiki-commands-test-find ()
+  "`org-wiki-find' visits the node chosen at the prompt."
+  (org-wiki-test-with-fixtures
+   (org-wiki-test--write-fixture "concepts/202605131012-cas.org"
+                                 org-wiki-test--concept-node)
+   (cl-letf (((symbol-function 'completing-read)
+              (lambda (&rest _) "Content-Addressed Storage")))
+     (org-wiki-find)
+     (should (string-match-p "Content-Addressed Storage"
+                             (org-get-heading t t t t))))))
+
 (provide 'org-wiki-commands-test)
 ;;; org-wiki-commands-test.el ends here
