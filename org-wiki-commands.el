@@ -132,5 +132,23 @@ With prefix arg OTHER-WINDOW, use another window."
   (let ((node (org-wiki--read "Wiki node: " (org-wiki--all-nodes))))
     (when node (org-wiki--visit node other-window))))
 
+;;;###autoload
+(defun org-wiki-search (query &optional literal)
+  "Search wiki nodes for QUERY and visit a chosen result.
+By default this runs the semantic backend via `org-wiki--search',
+which itself falls back to a literal text match when the backend
+errors.  With a prefix arg (LITERAL non-nil) the semantic backend is
+skipped entirely -- the predictable escape hatch when the embedding
+service is down.  A slow backend is interruptible with \\[keyboard-quit]."
+  (interactive "sWiki search: \nP")
+  (let* ((files (org-wiki--candidate-files))
+         (results (if literal
+                      (seq-take (org-wiki--text-search query files) 100)
+                    (org-wiki--search query 100))))
+    (if (null results)
+        (message "org-wiki: no matches for %S" query)
+      (let ((node (org-wiki--read (format "Wiki (%s): " query) results)))
+        (when node (org-wiki--visit node))))))
+
 (provide 'org-wiki-commands)
 ;;; org-wiki-commands.el ends here

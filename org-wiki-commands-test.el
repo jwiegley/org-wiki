@@ -77,5 +77,34 @@
      (should (string-match-p "Content-Addressed Storage"
                              (org-get-heading t t t t))))))
 
+(ert-deftest org-wiki-commands-test-search-default-uses-search ()
+  "`org-wiki-search' (no prefix) presents `org-wiki--search' results."
+  (org-wiki-test-with-fixtures
+   (org-wiki-test--write-fixture "concepts/202605131012-cas.org"
+                                 org-wiki-test--concept-node)
+   (cl-letf (((symbol-function 'org-wiki--search)
+              (lambda (q &optional _k)
+                (org-wiki--text-search q (org-wiki--candidate-files))))
+             ((symbol-function 'completing-read)
+              (lambda (&rest _) "Content-Addressed Storage")))
+     (org-wiki-search "content")
+     (should (string-match-p "Content-Addressed Storage"
+                             (org-get-heading t t t t))))))
+
+(ert-deftest org-wiki-commands-test-search-literal-skips-semantic ()
+  "With a prefix arg, `org-wiki-search' never calls `org-wiki--search'."
+  (org-wiki-test-with-fixtures
+   (org-wiki-test--write-fixture "concepts/202605131012-cas.org"
+                                 org-wiki-test--concept-node)
+   (let ((semantic-called nil))
+     (cl-letf (((symbol-function 'org-wiki--search)
+                (lambda (&rest _) (setq semantic-called t) nil))
+               ((symbol-function 'completing-read)
+                (lambda (&rest _) "Content-Addressed Storage")))
+       (org-wiki-search "content" t)
+       (should-not semantic-called)
+       (should (string-match-p "Content-Addressed Storage"
+                               (org-get-heading t t t t)))))))
+
 (provide 'org-wiki-commands-test)
 ;;; org-wiki-commands-test.el ends here
