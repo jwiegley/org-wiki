@@ -42,10 +42,14 @@
 ;;                              hash property) as a plist.
 ;;   - org-wiki-backlinks     — return backlinks from org-roam for a node.
 ;;
-;; Identity predicate:
+;; Identity predicates:
 ;;
-;;   - org-wiki-node-p — t iff the entry at point has :WIKI_KIND: set
-;;                       AND lives under `org-wiki-root'.
+;;   - org-wiki-node-p     — t iff the entry at point has :WIKI_KIND:
+;;                           set.  Identity is property-only (§2.1);
+;;                           location is a placement convention.
+;;   - org-wiki-writable-p — additionally requires the file to live
+;;                           under `org-wiki-root' (the write-allowlist
+;;                           boundary for the future mutation slice).
 ;;
 ;; The read-only surface needs none of: file locking, write-ahead log,
 ;; recovery, hash discipline, sandboxing.  Those will be added in the
@@ -69,7 +73,10 @@
 (declare-function org-roam-node-id "org-roam-node" (node) t)
 (declare-function org-roam-node-title "org-roam-node" (node) t)
 (declare-function org-ql-semantic-files "ext:org-ql-semantic")
+(declare-function org-ql-semantic--sort-by-score "ext:org-ql-semantic")
 (declare-function org-hash-property "ext:org-hash")
+(declare-function org-roam-db-query "org-roam-db")
+(defvar org-roam-db-location)
 
 (defgroup org-wiki nil
   "Org-native LLM Wiki — read-only spike."
@@ -93,6 +100,15 @@ A node is a wiki node only if it lives under this directory AND has a
 
 (defcustom org-wiki-default-search-limit 10
   "Default `k' (max results) for `org-wiki-search'."
+  :type 'integer
+  :group 'org-wiki)
+
+(defcustom org-wiki-id-refresh-interval 300
+  "Minimum seconds between cold-path `org-id-update-id-locations' calls.
+The refresh rescans the whole known corpus (org-id unions the files
+it is given with agenda files and previously known files), so an
+agent retrying hallucinated IDs must not be able to trigger a full
+rescan on every miss."
   :type 'integer
   :group 'org-wiki)
 
@@ -139,6 +155,58 @@ for callers."
   (when (file-directory-p org-wiki-root)
     (directory-files-recursively org-wiki-root "\\.org\\'")))
 
+(defun org-wiki--roam-wiki-files ()
+  "Return corpus files holding wiki nodes, per the org-roam DB.
+Identity is property-only (architecture doc §2.1): wiki nodes that
+have drifted outside `org-wiki-root' are still wiki nodes, and the
+roam DB is how reads find them.  Returns nil when org-roam or its
+database is unavailable.  The full-table scan is acceptable at
+personal scale; revisit with a cached view if the corpus grows."
+  (when (and (fboundp 'org-roam-db-query)
+             (boundp 'org-roam-db-location)
+             org-roam-db-location
+             (file-exists-p org-roam-db-location))
+    (ignore-errors
+      (let (files)
+        (pcase-dolist (`(,file ,properties)
+                       (org-roam-db-query
+                        [:select :distinct [file properties] :from nodes]))
+          (when (assoc "WIKI_KIND" properties)
+            (push file files)))
+        (nreverse files)))))
+
+(defun org-wiki--candidate-files ()
+  "Return all files that may contain wiki nodes.
+The wiki tree is always included; when the org-roam DB is available,
+files elsewhere in the corpus whose nodes carry `:WIKI_KIND:' are
+included too, so that search honors property-only identity."
+  (delete-dups (nconc (org-wiki--all-files) (org-wiki--roam-wiki-files))))
+
+(defvar org-wiki--id-last-refresh 0
+  "`float-time' of the last cold-path org-id locations refresh.")
+
+(defun org-wiki--locate-id (id)
+  "Return the file containing ID per `org-id-locations', or nil.
+On a miss, refresh the locations table at most once per
+`org-wiki-id-refresh-interval' seconds and retry."
+  (or (and (hash-table-p org-id-locations)
+           (gethash id org-id-locations))
+      (when (> (- (float-time) org-wiki--id-last-refresh)
+               org-wiki-id-refresh-interval)
+        (setq org-wiki--id-last-refresh (float-time))
+        (org-id-update-id-locations (org-wiki--all-files))
+        (and (hash-table-p org-id-locations)
+             (gethash id org-id-locations)))))
+
+(defun org-wiki--node-buffer (file)
+  "Return a buffer visiting FILE, reusing any live buffer.
+Fresh buffers are opened with mode hooks delayed: the read tools run
+inside the user's interactive session, and running the full
+`org-mode-hook' (input methods, appearance modes, on-save hashing)
+for every node a tool touches is slow and side-effectful."
+  (or (find-buffer-visiting file)
+      (delay-mode-hooks (find-file-noselect file))))
+
 (defun org-wiki--hash-property-name ()
   "Return the name of the hash property `org-hash' writes, if available.
 Returns nil when `org-hash' isn't loaded — in which case the read-only
@@ -177,52 +245,71 @@ Empty string if no such subheading exists."
 ;;;###autoload
 (defun org-wiki-search (query &optional k)
   "Search wiki nodes for QUERY, returning up to K (default 10) plists.
-Each result has keys :id :title :kind :file :summary (plus :score when a
-semantic backend was available).
+Each result has keys :id :title :kind :file :summary.
 
-When `org-ql-semantic-files' is bound the search is semantic-first;
-otherwise it falls back to a string match against `org-ql''s
-`heading' / `description' predicates."
+When `org-ql-semantic-files' is available the search is
+semantic-first and results are ordered by similarity.  If the
+semantic backend errors — org-ql-semantic signals rather than
+degrading when its CLI or embedding server is down — or is absent,
+the search falls back to a literal string match against `org-ql''s
+`heading' / `regexp' predicates, in corpus-traversal order with no
+relevance ranking."
   (require 'org-ql)
   (let* ((k (or k org-wiki-default-search-limit))
-         (all-files (org-wiki--all-files))
-         (semantic-available (fboundp 'org-ql-semantic-files))
-         (candidate-files
-          (if semantic-available
-              ;; org-ql-semantic--files returns files in semantic-similarity
-              ;; order; intersect with wiki tree
-              (cl-intersection (org-ql-semantic-files query) all-files
-                               :test #'string=)
-            all-files))
-         (results
-          (org-ql-select candidate-files
-                         (if semantic-available
-                             `(and (property "WIKI_KIND") (semantic ,query))
-                           `(and (property "WIKI_KIND")
-                                 (or (heading ,query)
-                                     (regexp ,(regexp-quote query)))))
-                         :action #'org-wiki--node-at-point-summary)))
-    (seq-take results k)))
+         (files (org-wiki--candidate-files))
+         (semantic
+          (when (fboundp 'org-ql-semantic-files)
+            (condition-case nil
+                (cons t (org-wiki--semantic-search query files))
+              ;; Degraded mode: backend down or misconfigured.
+              (error nil)))))
+    (seq-take (if semantic
+                  (cdr semantic)
+                (org-wiki--text-search query files))
+              k)))
+
+(defun org-wiki--semantic-search (query files)
+  "Return wiki-node summaries for QUERY from FILES, best match first."
+  (let ((wiki-set (make-hash-table :test #'equal)))
+    (dolist (file files)
+      (puthash file t wiki-set))
+    ;; Filter the similarity-ordered list against the wiki set rather
+    ;; than intersecting the other way around: `cl-intersection' does
+    ;; not preserve order, and the ranking is the point.
+    (let ((candidates (seq-filter (lambda (file) (gethash file wiki-set))
+                                  (org-ql-semantic-files query))))
+      (when candidates
+        (org-ql-select candidates
+                       `(and (property "WIKI_KIND") (semantic ,query))
+                       :action #'org-wiki--node-at-point-summary
+                       :sort #'org-ql-semantic--sort-by-score)))))
+
+(defun org-wiki--text-search (query files)
+  "Return wiki-node summaries matching QUERY literally in FILES."
+  (org-ql-select files
+                 `(and (property "WIKI_KIND")
+                       (or (heading ,query)
+                           (regexp ,(regexp-quote query))))
+                 :action #'org-wiki--node-at-point-summary))
 
 ;;;###autoload
 (defun org-wiki-read-node (id)
   "Return the full body of the wiki node with ID as a plain-text string.
-Signals `org-wiki-error' if no node with that ID exists, or if it isn't
-a wiki node."
-  (let ((file (gethash id org-id-locations)))
-    (unless file
-      ;; Cold-path: refresh org-id-locations once and retry.
-      (org-id-update-id-locations (org-wiki--all-files))
-      (setq file (gethash id org-id-locations)))
+The returned text is the node's whole subtree, including its property
+drawer.  Signals `org-wiki-error' if no node with that ID exists, or
+if it isn't a wiki node."
+  (let ((file (org-wiki--locate-id id)))
     (unless file
       (signal 'org-wiki-error (list :unknown_id id)))
-    (with-current-buffer (find-file-noselect file)
+    (with-current-buffer (org-wiki--node-buffer file)
       (save-excursion
         (goto-char (point-min))
         (unless (re-search-forward
                  (format "^[ \t]*:ID:[ \t]+%s\\b" (regexp-quote id))
                  nil t)
-          (signal 'org-wiki-error (list :id_not_in_file id file)))
+          ;; Deliberately no file path in the payload: error payloads
+          ;; travel to whatever MCP client is connected.
+          (signal 'org-wiki-error (list :id_not_in_file id)))
         (org-back-to-heading t)
         (unless (org-wiki-node-p)
           (signal 'org-wiki-error (list :not_a_wiki_node id)))
@@ -233,26 +320,25 @@ a wiki node."
 ;;;###autoload
 (defun org-wiki-node-metadata (id)
   "Return a plist of the property drawer of the wiki node with ID.
-The hash property (as returned by `org-hash-property') is stripped from
-the result if present."
-  (let ((file (gethash id org-id-locations))
-        (hash-prop (org-wiki--hash-property-name)))
-    (unless file
-      (org-id-update-id-locations (org-wiki--all-files))
-      (setq file (gethash id org-id-locations)))
+Hash properties (any property whose name starts with \"HASH_\") are
+stripped unconditionally: the integrity hash is tool-maintained and is
+never surfaced through the metadata view, whether or not org-hash is
+loaded in this session."
+  (let ((file (org-wiki--locate-id id)))
     (unless file
       (signal 'org-wiki-error (list :unknown_id id)))
-    (with-current-buffer (find-file-noselect file)
+    (with-current-buffer (org-wiki--node-buffer file)
       (save-excursion
         (goto-char (point-min))
         (unless (re-search-forward
                  (format "^[ \t]*:ID:[ \t]+%s\\b" (regexp-quote id))
                  nil t)
-          (signal 'org-wiki-error (list :id_not_in_file id file)))
+          (signal 'org-wiki-error (list :id_not_in_file id)))
         (org-back-to-heading t)
-        (let ((props (org-entry-properties nil 'standard)))
-          (when hash-prop
-            (setq props (assoc-delete-all hash-prop props)))
+        (let ((props (cl-remove-if
+                      (lambda (kv)
+                        (string-prefix-p "HASH_" (car kv) t))
+                      (org-entry-properties nil 'standard))))
           ;; Convert to a JSON-friendly plist
           (apply #'append
                  (mapcar (lambda (kv)
@@ -263,7 +349,7 @@ the result if present."
 ;;;###autoload
 (defun org-wiki-backlinks (id)
   "Return a list of plists describing backlinks to the wiki node with ID.
-Each plist has keys :from-id :from-title :from-file :anchor-text.
+Each plist has keys :from-id and :from-title.
 
 Uses `org-roam-backlinks-get' when `org-roam' is loaded; otherwise
 returns nil and logs a message."
