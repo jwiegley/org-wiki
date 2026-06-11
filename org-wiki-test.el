@@ -53,15 +53,26 @@
     full))
 
 (defun org-wiki-test--with-fixtures (body)
-  "Set up fixture directory, run BODY thunk, clean up."
+  "Set up fixture directory, run BODY thunk, clean up.
+Cleanup kills any buffer left visiting a fixture file — the read
+paths open buffers, and leaking buffers that visit deleted files
+would let one test see another's stale state."
   (let* ((root (make-temp-file "org-wiki-fixture-" t))
          (org-wiki-root (file-name-as-directory root))
          (org-roam-directory (file-name-as-directory root))
          (org-id-locations (make-hash-table :test 'equal))
          (org-id-locations-file (expand-file-name ".org-id-locations" root))
+         (org-wiki--id-last-refresh 0)
          (org-wiki-test--fixture-dir root))
     (unwind-protect
         (funcall body)
+      (dolist (buf (buffer-list))
+        (let ((file (buffer-file-name buf)))
+          (when (and file
+                     (string-prefix-p (file-name-as-directory root) file))
+            (with-current-buffer buf
+              (set-buffer-modified-p nil))
+            (kill-buffer buf))))
       (delete-directory root t))))
 
 (defmacro org-wiki-test-with-fixtures (&rest body)
@@ -201,6 +212,13 @@ The write-allowlist (§3.5) is path-bounded even when identity is not."
     "concepts/202605131014-random.org"
     org-wiki-test--non-wiki-node)
    (let ((results (org-wiki-search "Content" 10)))
+     ;; Must actually find the matching wiki node — without this the
+     ;; test passes vacuously on an empty result list.
+     (should results)
+     (should (cl-some (lambda (r)
+                        (string= (plist-get r :id)
+                                 "4f1c3b8e-9ad2-4b7e-9d04-1a5e6f7c8b91"))
+                      results))
      (should (cl-every (lambda (r) (plist-get r :kind)) results))
      ;; The non-wiki node must be filtered out
      (should-not
@@ -266,6 +284,22 @@ The write-allowlist (§3.5) is path-bounded even when identity is not."
        (should (plist-get meta :id))
        (should (string= (plist-get meta :wiki_kind) "Concept"))))))
 
+(ert-deftest org-wiki-test-node-metadata-strips-hash ()
+  "Metadata must never surface a HASH_* property, with or without org-hash.
+
+The fixture node carries :HASH_sha512_256:, and the strip must not
+depend on org-hash being loaded — it is optional at runtime."
+  (org-wiki-test-with-fixtures
+   (let ((file (org-wiki-test--write-fixture
+                "concepts/202605131012-content-addressed-storage.org"
+                org-wiki-test--concept-node)))
+     (puthash "4f1c3b8e-9ad2-4b7e-9d04-1a5e6f7c8b91" file org-id-locations)
+     (let ((meta (org-wiki-node-metadata "4f1c3b8e-9ad2-4b7e-9d04-1a5e6f7c8b91")))
+       (should meta)
+       (cl-loop for (key _value) on meta by #'cddr
+                do (should-not (string-prefix-p ":hash_"
+                                                (symbol-name key))))))))
+
 ;;;; --- The org-ql property predicate ------------------------------
 
 (ert-deftest org-wiki-test-property-predicate-matches-existence ()
@@ -330,34 +364,52 @@ re-signaled before the generic catch."
       (should (string-match-p "internal_error" payload))
       (should (string-match-p "boom" payload)))))
 
+(ert-deftest org-wiki-test-with-error-handling-structures-wiki-error ()
+  "Wiki errors surface as structured JSON, not flattened internal_error.
+
+An unknown-id failure must reach the MCP client as
+{\"error\": \"unknown_id\", \"detail\": ...} rather than as an opaque
+internal_error whose message is `error-message-string' noise."
+  (org-wiki-test-with-fixtures
+   (let ((err (should-error
+               (org-wiki-mcp--read-node-tool "no-such-id-anywhere")
+               :type 'mcp-server-lib-tool-error)))
+     (let ((payload (cadr err)))
+       (should (stringp payload))
+       (should (string-match-p "\"error\":\"unknown_id\"" payload))
+       (should (string-match-p "no-such-id-anywhere" payload))
+       (should-not (string-match-p "internal_error" payload))))))
+
 ;;;; --- MCP API verification ---------------------------------------
 
 (ert-deftest org-wiki-test-mcp-register-tool-accepts-multi-arg ()
-  "Verify mcp-server-lib-register-tool accepts a multi-positional-arg handler.
+  "Verify the server registration accepts a multi-positional-arg handler.
 
-Schema is generated from the arglist with all parameters typed as
-string.  Verified at mcp-server-lib.el lines 323-340."
+Uses `mcp-server-lib-register-server' (the current API; per-tool
+`mcp-server-lib-register-tool' is obsolete as of 0.3.0).  The schema
+is generated from the arglist with all parameters typed as string."
   (let ((server-id "org-wiki-test")
         (tool-id "test_two_arg"))
     (unwind-protect
         (progn
-          (mcp-server-lib-register-tool
-           (lambda (a b)
-             "Test two-arg handler.
+          (mcp-server-lib-register-server
+           :id server-id
+           :tools (list
+                   (list (lambda (a b)
+                           "Test two-arg handler.
 
 MCP Parameters:
   a - first param
   b - second param"
-             (format "%s+%s" a b))
-           :id tool-id
-           :server-id server-id
-           :description "Sum two strings"
-           :read-only t)
+                           (format "%s+%s" a b))
+                         :id tool-id
+                         :description "Sum two strings"
+                         :read-only t)))
           ;; Verify it's registered by checking the per-server tools table
           (let ((tools-table (gethash server-id mcp-server-lib--tools)))
             (should tools-table)
             (should (gethash tool-id tools-table))))
-      (mcp-server-lib-unregister-tool tool-id server-id))))
+      (mcp-server-lib-unregister-server server-id))))
 
 (ert-deftest org-wiki-test-mcp-schema-from-docstring ()
   "Verify mcp-server-lib extracts parameter docs from the docstring block.
@@ -386,20 +438,28 @@ MCP Parameters:
 
 Uses a unique server-id to avoid colliding with any existing tools."
   (let ((org-wiki-mcp-server-id "org-wiki-test-roundtrip")
-        (org-wiki-mcp--registered-tool-ids nil))
+        (org-wiki-mcp--registered nil))
     (unwind-protect
         (progn
           (org-wiki-mcp-enable)
-          (should (= 4 (length org-wiki-mcp--registered-tool-ids)))
+          (should org-wiki-mcp--registered)
+          (let ((tools-table (gethash org-wiki-mcp-server-id
+                                      mcp-server-lib--tools)))
+            (should tools-table)
+            (should (= 4 (hash-table-count tools-table))))
           (org-wiki-mcp-disable)
-          (should (null org-wiki-mcp--registered-tool-ids)))
+          (should-not org-wiki-mcp--registered)
+          (let ((tools-table (gethash org-wiki-mcp-server-id
+                                      mcp-server-lib--tools)))
+            (should (or (null tools-table)
+                        (zerop (hash-table-count tools-table))))))
       ;; cleanup in case of early failure
       (ignore-errors (org-wiki-mcp-disable)))))
 
 (ert-deftest org-wiki-test-enable-twice-errors ()
   "Calling enable twice without disabling should signal a clear error."
   (let ((org-wiki-mcp-server-id "org-wiki-test-double-enable")
-        (org-wiki-mcp--registered-tool-ids nil))
+        (org-wiki-mcp--registered nil))
     (unwind-protect
         (progn
           (org-wiki-mcp-enable)

@@ -62,8 +62,6 @@ Option α is the recommended default."
   :type 'string
   :group 'org-wiki-mcp)
 
-(defvar org-wiki-mcp--registered-tool-ids nil
-  "List of tool ids currently registered by `org-wiki-mcp-enable'.")
 
 ;;;; --- Error signaling --------------------------------------------
 ;;
@@ -99,6 +97,17 @@ explicitly."
   (signal 'mcp-server-lib-tool-error
           (list (json-encode alist))))
 
+(defun org-wiki-mcp--wiki-error-payload (data)
+  "Convert `org-wiki-error' signal DATA to a JSON-ready alist.
+DATA is (CODE-KEYWORD ARG...) as signaled by the org-wiki read API,
+for example (:unknown_id \"abc\")."
+  (let ((code (car data)))
+    `((error . ,(if (keywordp code)
+                    (substring (symbol-name code) 1)
+                  "wiki_error"))
+      ,@(when (cdr data)
+          `((detail . ,(format "%s" (cadr data))))))))
+
 (defmacro org-wiki-mcp--with-error-handling (&rest body)
   "Run BODY, converting unexpected errors to JSON-encoded tool errors.
 
@@ -112,6 +121,11 @@ doc introduced — see commentary above."
      ;; Re-raise tool errors so the dispatcher gets them intact
      (mcp-server-lib-tool-error
       (signal (car err) (cdr err)))
+     ;; Wiki errors carry a structured (CODE ARG...) payload; surface
+     ;; it as structured JSON rather than letting the generic clause
+     ;; flatten it into an opaque "internal_error" message string.
+     (org-wiki-error
+      (org-wiki-mcp--throw (org-wiki-mcp--wiki-error-payload (cdr err))))
      ;; Only the generic case becomes "internal_error"
      (error
       (org-wiki-mcp--throw
@@ -125,16 +139,26 @@ doc introduced — see commentary above."
 
 MCP Parameters:
   query - search query string
-  k - maximum number of results (an integer, encoded as a JSON number;
+  k - maximum number of results (a positive integer up to 100;
       mcp-server-lib delivers all schema parameters as strings, so the
-      handler parses it)."
+      handler parses it; anything unparsable falls back to the
+      default limit)."
   (org-wiki-mcp--with-error-handling
     (json-encode
-     (org-wiki-search query
-                      (cond ((numberp k) k)
-                            ((and (stringp k) (string-match-p "\\`[0-9]+\\'" k))
-                             (string-to-number k))
-                            (t org-wiki-default-search-limit))))))
+     (org-wiki-search query (org-wiki-mcp--parse-k k)))))
+
+(defun org-wiki-mcp--parse-k (k)
+  "Return a sane result limit from the wire-level K value.
+Overflowing literals parse to floats and negative or junk values
+must not reach `seq-take', so anything outside 1..100 falls back to
+`org-wiki-default-search-limit'."
+  (cond ((and (integerp k) (> k 0)) (min k 100))
+        ((and (stringp k) (string-match-p "\\`[0-9]+\\'" k))
+         (let ((n (string-to-number k)))
+           (if (and (integerp n) (> n 0))
+               (min n 100)
+             org-wiki-default-search-limit)))
+        (t org-wiki-default-search-limit)))
 
 (defun org-wiki-mcp--read-node-tool (id)
   "Return the full body of the wiki node with ID.
@@ -163,32 +187,46 @@ MCP Parameters:
 ;;;; --- Registration -----------------------------------------------
 
 (defconst org-wiki-mcp--tools
-  '(("wiki_search"        org-wiki-mcp--search-tool        t)
-    ("wiki_read_node"     org-wiki-mcp--read-node-tool     t)
-    ("wiki_node_metadata" org-wiki-mcp--node-metadata-tool t)
-    ("wiki_backlinks"     org-wiki-mcp--backlinks-tool     t))
-  "Tool registration spec: (TOOL-ID HANDLER-SYMBOL READ-ONLY-P).
-All read-only spike tools have READ-ONLY-P = t.")
+  '(("wiki_search" org-wiki-mcp--search-tool
+     "Search wiki nodes (entries with a :WIKI_KIND: property).  Returns \
+up to k results as JSON objects with id, title, kind, file, and \
+summary, ordered by semantic similarity when the backend is available.")
+    ("wiki_read_node" org-wiki-mcp--read-node-tool
+     "Return the full body of the wiki node with the given :ID: — its \
+whole subtree with Org syntax preserved.")
+    ("wiki_node_metadata" org-wiki-mcp--node-metadata-tool
+     "Return the property drawer of the wiki node with the given :ID: \
+as JSON, with tool-maintained hash properties stripped.")
+    ("wiki_backlinks" org-wiki-mcp--backlinks-tool
+     "Return the nodes that link to the wiki node with the given :ID:, \
+via org-roam's backlink index."))
+  "Tool registration spec: (TOOL-ID HANDLER-SYMBOL DESCRIPTION).
+The descriptions are hand-written summaries: per-parameter text lives
+in each handler's `MCP Parameters:' docstring block, which
+mcp-server-lib extracts into the inputSchema — passing the whole
+docstring as :description would duplicate it.  All spike tools are
+read-only.")
+
+(defvar org-wiki-mcp--registered nil
+  "Non-nil while the wiki server registration is live.")
 
 ;;;###autoload
 (defun org-wiki-mcp-enable ()
-  "Register the read-only wiki tools against the running mcp-server-lib server."
+  "Register the read-only wiki tools against the running mcp-server-lib server.
+Uses `mcp-server-lib-register-server' (the current API; the older
+per-tool `mcp-server-lib-register-tool' is obsolete as of 0.3.0).
+No :instructions are set because the default server-id is a shared
+endpoint and that field is last-writer-wins."
   (interactive)
-  (when org-wiki-mcp--registered-tool-ids
-    (user-error "Wiki MCP tools already registered (%d tools); call org-wiki-mcp-disable first"
-                (length org-wiki-mcp--registered-tool-ids)))
-  (dolist (spec org-wiki-mcp--tools)
-    (let ((id (nth 0 spec))
-          (handler (nth 1 spec))
-          (read-only (nth 2 spec)))
-      (mcp-server-lib-register-tool
-       handler
-       :id id
-       :server-id org-wiki-mcp-server-id
-       :description (or (documentation handler)
-                        (format "Org-wiki tool: %s" id))
-       :read-only read-only)
-      (push id org-wiki-mcp--registered-tool-ids)))
+  (when org-wiki-mcp--registered
+    (user-error "Wiki MCP tools already registered; call org-wiki-mcp-disable first"))
+  (mcp-server-lib-register-server
+   :id org-wiki-mcp-server-id
+   :tools (mapcar (pcase-lambda (`(,id ,handler ,description))
+                    (list handler :id id :description description
+                          :read-only t))
+                  org-wiki-mcp--tools))
+  (setq org-wiki-mcp--registered t)
   (message "org-wiki: registered %d read-only tools on server-id %S"
            (length org-wiki-mcp--tools)
            org-wiki-mcp-server-id))
@@ -197,9 +235,9 @@ All read-only spike tools have READ-ONLY-P = t.")
 (defun org-wiki-mcp-disable ()
   "Unregister all wiki tools."
   (interactive)
-  (dolist (id org-wiki-mcp--registered-tool-ids)
-    (mcp-server-lib-unregister-tool id org-wiki-mcp-server-id))
-  (setq org-wiki-mcp--registered-tool-ids nil)
+  (when org-wiki-mcp--registered
+    (mcp-server-lib-unregister-server org-wiki-mcp-server-id)
+    (setq org-wiki-mcp--registered nil))
   (message "org-wiki: unregistered tools"))
 
 (provide 'org-wiki-mcp)
