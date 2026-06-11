@@ -24,13 +24,29 @@
 
           emacsPackages = pkgs.emacsPackagesFor pkgs.emacs-nox;
 
+          # The nixpkgs MELPA snapshot predates the
+          # mcp-server-lib-register-server API (0.4.0) that both the
+          # user's live config and org-wiki-mcp.el use; pin the same
+          # upstream commit the user runs.
+          mcp-server-lib = emacsPackages.mcp-server-lib.overrideAttrs (_old: {
+            version = "0.4.0-unstable-2026-06-10";
+            src = pkgs.fetchFromGitHub {
+              owner = "laurynas-biveinis";
+              repo = "mcp-server-lib.el";
+              rev = "2bb738efc39bf6bd01fa955590500eab890c37ba";
+              hash = "sha256-WU/UZpfBMxkSd/dcDRwXkhNnPmBVaBblFWjCI4/c/Zw=";
+            };
+          });
+
           runtimeDeps =
-            epkgs: with epkgs; [
+            epkgs:
+            with epkgs;
+            [
               org
               org-roam
               org-ql
-              mcp-server-lib
-            ];
+            ]
+            ++ [ mcp-server-lib ];
 
           devDeps =
             epkgs: with epkgs; [
