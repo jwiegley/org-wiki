@@ -211,7 +211,7 @@ The write-allowlist (§3.5) is path-bounded even when identity is not."
    (org-wiki-test--write-fixture
     "concepts/202605131014-random.org"
     org-wiki-test--non-wiki-node)
-   (let ((results (org-wiki-search "Content" 10)))
+   (let ((results (org-wiki--search "Content" 10)))
      ;; Must actually find the matching wiki node — without this the
      ;; test passes vacuously on an empty result list.
      (should results)
@@ -236,7 +236,7 @@ The write-allowlist (§3.5) is path-bounded even when identity is not."
    (org-wiki-test--write-fixture
     "entities/202605131013-andrej-karpathy.org"
     org-wiki-test--entity-node)
-   (let ((results (org-wiki-search "" 1)))
+   (let ((results (org-wiki--search "" 1)))
      (should (<= (length results) 1)))))
 
 ;;;; --- Reading ----------------------------------------------------

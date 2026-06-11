@@ -11,7 +11,7 @@
 ;; and fails if anything signals outside its documented error
 ;; contract:
 ;;
-;;   - `org-wiki-search' and `org-wiki-node-p' must never signal.
+;;   - `org-wiki--search' and `org-wiki-node-p' must never signal.
 ;;   - `org-wiki-read-node' / `org-wiki-node-metadata' may signal only
 ;;     `org-wiki-error'.
 ;;   - The MCP handlers may signal only `mcp-server-lib-tool-error'.
@@ -139,8 +139,8 @@ ITERATION, OP and INPUT annotate any failure report."
           (pcase (random 5)
             (0 (let ((query (org-wiki-fuzz--string 30))
                      (k (- (random 30) 5)))
-                 (org-wiki-fuzz--check i "org-wiki-search" (list query k) nil
-                                       (lambda () (org-wiki-search query k)))))
+                 (org-wiki-fuzz--check i "org-wiki--search" (list query k) nil
+                                       (lambda () (org-wiki--search query k)))))
             (1 (let ((id (org-wiki-fuzz--id)))
                  (org-wiki-fuzz--check i "org-wiki-read-node" id
                                        '(org-wiki-error)

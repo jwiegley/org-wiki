@@ -196,8 +196,7 @@ Add to `~/org/init.org`:
 ```elisp
 (use-package org-wiki
   :load-path "~/src/dot-emacs/lisp/org-wiki"
-  :commands (org-wiki-search org-wiki-read-node
-             org-wiki-node-metadata org-wiki-backlinks
+  :commands (org-wiki-read-node org-wiki-node-metadata
              org-wiki-mcp-enable org-wiki-mcp-disable))
 
 (use-package org-wiki-mcp

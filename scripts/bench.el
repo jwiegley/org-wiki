@@ -154,7 +154,7 @@ THUNK is executed ITERATIONS times per rep."
              ;; Fresh cache per call so we measure the query, not
              ;; org-ql's memoization.
              (let ((org-ql-cache (make-hash-table :weakness 'key)))
-               (org-wiki-search "storage" 10))))
+               (org-wiki--search "storage" 10))))
           (org-wiki-bench--run-one
            "read-node" 1000
            (lambda () (org-wiki-read-node wiki-id)))

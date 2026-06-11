@@ -34,13 +34,13 @@
 ;;
 ;; Tools implemented (all read-only):
 ;;
-;;   - org-wiki-search        — semantic search (uses org-ql-semantic if
+;;   - org-wiki--search        — semantic search (uses org-ql-semantic if
 ;;                              available, otherwise falls back to text
 ;;                              match) scoped to nodes with :WIKI_KIND:.
 ;;   - org-wiki-read-node     — return full body text of a node by :ID:.
 ;;   - org-wiki-node-metadata — return the property drawer (minus the
 ;;                              hash property) as a plist.
-;;   - org-wiki-backlinks     — return backlinks from org-roam for a node.
+;;   - org-wiki--backlinks     — return backlinks from org-roam for a node.
 ;;
 ;; Identity predicates:
 ;;
@@ -99,7 +99,7 @@ A node is a wiki node only if it lives under this directory AND has a
   :group 'org-wiki)
 
 (defcustom org-wiki-default-search-limit 10
-  "Default `k' (max results) for `org-wiki-search'."
+  "Default `k' (max results) for `org-wiki--search'."
   :type 'integer
   :group 'org-wiki)
 
@@ -242,8 +242,7 @@ Empty string if no such subheading exists."
 
 ;;;; --- Discovery tools --------------------------------------------
 
-;;;###autoload
-(defun org-wiki-search (query &optional k)
+(defun org-wiki--search (query &optional k)
   "Search wiki nodes for QUERY, returning up to K (default 10) plists.
 Each result has keys :id :title :kind :file :summary.
 
@@ -346,8 +345,7 @@ loaded in this session."
                                  (cdr kv)))
                          props)))))))
 
-;;;###autoload
-(defun org-wiki-backlinks (id)
+(defun org-wiki--backlinks (id)
   "Return a list of plists describing backlinks to the wiki node with ID.
 Each plist has keys :from-id and :from-title.
 
@@ -355,7 +353,7 @@ Uses `org-roam-backlinks-get' when `org-roam' is loaded; otherwise
 returns nil and logs a message."
   (cond
    ((not (fboundp 'org-roam-node-from-id))
-    (message "org-wiki-backlinks: org-roam not loaded; returning nil")
+    (message "org-wiki--backlinks: org-roam not loaded; returning nil")
     nil)
    (t
     (let* ((node (org-roam-node-from-id id))

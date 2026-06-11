@@ -73,7 +73,7 @@ Option α is the recommended default."
 ;; pattern recommended by v2.2 of the architecture doc:
 ;;
 ;;   (condition-case err
-;;       (json-encode (org-wiki-search query k))
+;;       (json-encode (org-wiki--search query k))
 ;;     (error (org-wiki-mcp--throw `((error . "internal_error") ...))))
 ;;
 ;; then our own `mcp-server-lib-tool-error' signals get caught and
@@ -145,7 +145,7 @@ MCP Parameters:
       default limit)."
   (org-wiki-mcp--with-error-handling
     (json-encode
-     (org-wiki-search query (org-wiki-mcp--parse-k k)))))
+     (org-wiki--search query (org-wiki-mcp--parse-k k)))))
 
 (defun org-wiki-mcp--parse-k (k)
   "Return a sane result limit from the wire-level K value.
@@ -182,7 +182,7 @@ MCP Parameters:
 MCP Parameters:
   id - the :ID: property value of the target node."
   (org-wiki-mcp--with-error-handling
-    (json-encode (org-wiki-backlinks id))))
+    (json-encode (org-wiki--backlinks id))))
 
 ;;;; --- Registration -----------------------------------------------
 
