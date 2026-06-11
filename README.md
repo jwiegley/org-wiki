@@ -32,9 +32,10 @@ mutation slice would depend on.
 
 ## What it verified
 
-All 18 ERT tests pass against Emacs 30.2 with the user's installed
-`mcp-server-lib`, `org-roam`, `org-ql`, and `org-hash`. The tests double
-as empirical verification of architecture-doc claims.
+All 21 ERT tests pass (one is skipped when the optional `org-hash`
+isn't present) against Emacs 30.2 with `mcp-server-lib` 0.4.0,
+`org-roam`, and `org-ql`. The tests double as empirical verification
+of architecture-doc claims.
 
 ### ✅ `(property "WIKI_KIND")` matches by existence
 
@@ -48,12 +49,15 @@ correctly returns the wiki node and excludes the non-wiki node.
 **Conclusion:** the predicate is sound. The doc's claim survives. Use
 `(property "WIKI_KIND")` as the wiki-node identity predicate everywhere.
 
-### ✅ `mcp-server-lib-register-tool` accepts multi-positional-arg handlers
+### ✅ Multi-positional-arg handlers register cleanly
 
 The test `org-wiki-test-mcp-register-tool-accepts-multi-arg` registers a
 two-argument handler and verifies the tool appears in the registry. The
 auto-generated schema is built from the arglist with parameter
 descriptions parsed from the `MCP Parameters:` docstring block.
+(Registration goes through `mcp-server-lib-register-server` — the
+per-tool `mcp-server-lib-register-tool` this spike originally used is
+obsolete as of 0.3.0, and the package was ported accordingly.)
 
 **Conclusion:** multi-arg defuns are the right pattern for typed
 parameters. The doc's Appendix C signature shape is sound. Note that
@@ -112,9 +116,9 @@ attention to clause order will silently lose tool-error payloads.
 
 Registering all four tools, then disabling, leaves the registry clean.
 Double-enable signals a clear `user-error`. The preflight via
-`org-wiki-mcp--registered-tool-ids` prevents `mcp-server-lib`'s silent
-ref-counted re-registration (which would keep the *original* handler
-and ignore the new one — verified at `mcp-server-lib.el:1210–1212`).
+`org-wiki-mcp--registered` prevents `mcp-server-lib`'s silent
+ref-counted re-registration (which keeps the *original* handler and
+ignores the new one — documented in the `register-server` docstring).
 
 ### ✅ Identity predicate corner cases
 
@@ -181,7 +185,7 @@ load path:
 nix develop --command make test
 ```
 
-Expected output: `Ran 19 tests, 18 results as expected, 0 unexpected,
+Expected output: `Ran 21 tests, 20 results as expected, 0 unexpected,
 1 skipped`. (The `org-hash` test is skipped unless that package is
 present; it is optional and not part of the pinned toolchain.)
 

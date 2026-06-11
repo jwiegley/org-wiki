@@ -65,12 +65,21 @@ format-check:
 # --- Coverage --------------------------------------------------------
 
 .PHONY: coverage coverage-check coverage-baseline coverage-html
+# Coverage runs against a hermetic temp-dir copy of the sources:
+# undercover silently skips instrumentation when a .elc shadows the
+# source, and the parallel pre-commit jobs byte-compile in the working
+# tree while this runs.
 coverage:
 	rm -rf coverage
-	rm -f *.elc
 	mkdir -p coverage
-	UNDERCOVER_FORCE=true $(BATCH) -l scripts/coverage.el \
-	  -l $(TEST_FILES) -f ert-run-tests-batch-and-exit
+	set -e; tmpdir=$$(mktemp -d); trap 'rm -rf "$$tmpdir"' 0; \
+	cp $(PKG_FILES) $(TEST_FILES) "$$tmpdir/"; \
+	mkdir -p "$$tmpdir/scripts" "$$tmpdir/coverage"; \
+	cp scripts/coverage.el "$$tmpdir/scripts/"; \
+	(cd "$$tmpdir" && UNDERCOVER_FORCE=true $(EMACS) -Q --batch -L . \
+	  -l scripts/coverage.el -l $(TEST_FILES) \
+	  -f ert-run-tests-batch-and-exit); \
+	cp "$$tmpdir/coverage/lcov.info" coverage/lcov.info
 
 coverage-check: coverage
 	scripts/coverage-check.sh
