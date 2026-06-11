@@ -123,5 +123,19 @@
      (should (string-match-p "Andrej Karpathy"
                              (org-get-heading t t t t))))))
 
+(ert-deftest org-wiki-commands-test-show-metadata ()
+  "`org-wiki-show-metadata' renders the node's drawer into a buffer."
+  (org-wiki-test-with-fixtures
+   (org-wiki-test--write-fixture "concepts/202605131012-cas.org"
+                                 org-wiki-test--concept-node)
+   (when (get-buffer "*org-wiki-metadata*")
+     (kill-buffer "*org-wiki-metadata*"))
+   (org-wiki-show-metadata "4f1c3b8e-9ad2-4b7e-9d04-1a5e6f7c8b91")
+   (with-current-buffer "*org-wiki-metadata*"
+     (let ((text (buffer-string)))
+       (should (string-match-p "wiki_kind" (downcase text)))
+       (should (string-match-p "Concept" text))
+       (should-not (string-match-p "hash_" (downcase text)))))))
+
 (provide 'org-wiki-commands-test)
 ;;; org-wiki-commands-test.el ends here

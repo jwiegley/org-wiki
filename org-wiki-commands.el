@@ -21,6 +21,7 @@
 
 ;;; Code:
 
+(require 'cl-lib)
 (require 'org)
 (require 'org-wiki)
 
@@ -181,6 +182,28 @@ enclosing wiki heading); with none, prompt for a node."
                               links))
                (node (org-wiki--read "Backlink: " nodes)))
           (when node (org-wiki--visit node)))))))
+
+;;;###autoload
+(defun org-wiki-show-metadata (&optional id)
+  "Show the property drawer of the wiki node ID in a transient buffer.
+Interactively, ID defaults to the node at point, else prompts.  Hash
+properties are already stripped by `org-wiki-node-metadata'."
+  (interactive)
+  (let* ((id (or id (org-wiki--id-at-point)
+                 (plist-get (org-wiki--read "Metadata for: "
+                                            (org-wiki--all-nodes))
+                            :id))))
+    (unless id (user-error "org-wiki: No node specified"))
+    (let ((meta (org-wiki-node-metadata id)))
+      (with-current-buffer (get-buffer-create "*org-wiki-metadata*")
+        (let ((inhibit-read-only t))
+          (erase-buffer)
+          (cl-loop for (k v) on meta by #'cddr
+                   do (insert (format "%-14s %s\n"
+                                      (substring (symbol-name k) 1) v)))
+          (goto-char (point-min)))
+        (special-mode)
+        (display-buffer (current-buffer))))))
 
 (provide 'org-wiki-commands)
 ;;; org-wiki-commands.el ends here
