@@ -463,6 +463,210 @@ an org-id locations lookup."
                                :from-title "Andrej Karpathy"
                                :from-file "/tmp/ak.org"))))))
 
+;;;; --- Two-id normalization (file-level alias) ---------------------
+
+;; Wiki node files on disk carry TWO ids: the file-level lint
+;; conventions mandate a top-of-file :PROPERTIES: drawer with its own
+;; :ID: and :CREATED:, while the node's canonical identity is the
+;; heading :ID: that carries :WIKI_KIND: (exactly one such heading
+;; per file, per the architecture doc).  The read tools must treat
+;; the file-level id as an alias for the node — not crash in
+;; `org-back-to-heading' — and must teach callers the canonical
+;; heading id.
+
+(defconst org-wiki-test--file-level-id
+  "AAAAAAAA-BBBB-4CCC-8DDD-EEEEFFFF0000"
+  "File-level (top-of-file drawer) id of the double-id fixture.")
+
+(defconst org-wiki-test--heading-id
+  "3cfdef55-0a72-4bb2-b44e-e6b73f6b3f52"
+  "Canonical heading id of the double-id fixture.")
+
+(defconst org-wiki-test--double-id-node
+  (concat ":PROPERTIES:
+:ID:       " org-wiki-test--file-level-id "
+:CREATED:  [2026-06-10 Wed 23:36]
+:END:
+#+category: wiki
+#+filetags: :wiki:concept:
+#+title:    ZX-calculus
+
+* ZX-calculus
+:PROPERTIES:
+:ID:         " org-wiki-test--heading-id "
+:WIKI_KIND:  Concept
+:CONFIDENCE: high
+:CREATED:    [2026-06-10 Wed 23:36]
+:END:
+
+** Summary
+
+A graphical calculus for reasoning about linear maps between qubits.
+")
+  "Node file matching the live lint-canonical anatomy.
+File-level drawer with an uppercase UUID, keyword lines with #+title
+last, flush-left heading drawer with a lowercase UUID carrying
+:WIKI_KIND:.")
+
+(defconst org-wiki-test--file-id-only-node "\
+:PROPERTIES:
+:ID:       11111111-2222-4333-8444-555566667777
+:CREATED:  [2026-06-11 Thu 00:10]
+:END:
+#+filetags: :wiki:
+#+title:    Mind Map
+
+Prose before any heading.
+
+* Not a wiki heading
+:PROPERTIES:
+:CREATED: [2026-06-11 Thu 00:11]
+:END:
+
+This heading has no :WIKI_KIND:, so the alias redirect must fail
+rather than land here.
+"
+  "A file carrying only the lint-mandated file-level id.
+Mirrors index files like MIND_MAP.org/README.org, which have no
+:WIKI_KIND: heading.")
+
+(defun org-wiki-test--write-double-id-fixture ()
+  "Write the double-id fixture and register both ids.
+Return the file's absolute path."
+  (let ((file (org-wiki-test--write-fixture
+               "concepts/202606102336-zx-calculus.org"
+               org-wiki-test--double-id-node)))
+    (puthash org-wiki-test--file-level-id file org-id-locations)
+    (puthash org-wiki-test--heading-id file org-id-locations)
+    file))
+
+(ert-deftest org-wiki-test-read-node-accepts-file-level-id ()
+  "Reading via the file-level id returns the wiki heading's subtree.
+The result must be byte-identical to reading via the heading id —
+the historical failure was a leaked `org-back-to-heading' user-error
+\(\"Before first headline at position 14 in buffer ...\")."
+  (org-wiki-test-with-fixtures
+   (org-wiki-test--write-double-id-fixture)
+   (let ((via-file (org-wiki-read-node org-wiki-test--file-level-id))
+         (via-heading (org-wiki-read-node org-wiki-test--heading-id)))
+     (should (string-prefix-p "* ZX-calculus" via-file))
+     (should (string-match-p "graphical calculus" via-file))
+     (should (equal via-file via-heading)))))
+
+(ert-deftest org-wiki-test-canonical-id-normalizes-file-level-id ()
+  "`org-wiki-canonical-id' maps the file-level alias to the heading id.
+Heading ids are already canonical and unknown ids signal."
+  (org-wiki-test-with-fixtures
+   (org-wiki-test--write-double-id-fixture)
+   (should (equal (org-wiki-canonical-id org-wiki-test--file-level-id)
+                  org-wiki-test--heading-id))
+   (should (equal (org-wiki-canonical-id org-wiki-test--heading-id)
+                  org-wiki-test--heading-id))
+   (should-error
+    (org-wiki-canonical-id "00000000-0000-0000-0000-000000000000")
+    :type 'org-wiki-error)
+   ;; The lenient resolver used by backlinks never signals: unknown
+   ;; ids pass through unchanged.
+   (should (equal (org-wiki--resolve-id "no-such-id") "no-such-id"))))
+
+(ert-deftest org-wiki-test-node-metadata-accepts-file-level-id ()
+  "Metadata via the file-level id is the heading's drawer.
+Its :id entry must carry the canonical heading id, and the plist must
+equal the one returned for the heading id."
+  (org-wiki-test-with-fixtures
+   (org-wiki-test--write-double-id-fixture)
+   (let ((via-file (org-wiki-node-metadata org-wiki-test--file-level-id)))
+     (should (equal (plist-get via-file :id) org-wiki-test--heading-id))
+     (should (string= (plist-get via-file :wiki_kind) "Concept"))
+     (should (equal via-file
+                    (org-wiki-node-metadata org-wiki-test--heading-id))))))
+
+(ert-deftest org-wiki-test-read-node-tool-reports-canonical-id ()
+  "The wiki_read_node payload carries the canonical heading id.
+An agent that found the file-level alias (from the raw file or
+org-roam) must learn the heading id from the response; heading-id
+calls stay byte-identical."
+  (org-wiki-test-with-fixtures
+   (org-wiki-test--write-double-id-fixture)
+   (let ((json (org-wiki-mcp--read-node-tool org-wiki-test--file-level-id)))
+     (should (string-match-p
+              (regexp-quote
+               (concat "\"id\":\"" org-wiki-test--heading-id "\""))
+              json))
+     (should-not (string-match-p org-wiki-test--file-level-id json))
+     (should (string-match-p "ZX-calculus" json))
+     (should (equal json
+                    (org-wiki-mcp--read-node-tool
+                     org-wiki-test--heading-id))))))
+
+(ert-deftest org-wiki-test-backlinks-normalize-file-level-id ()
+  "Backlinks via the file-level id are the heading's backlinks.
+Nothing links to the file-level alias, so an un-normalized query
+would return a misleading empty list; the roam query must receive
+the canonical heading id."
+  (org-wiki-test-with-fixtures
+   (org-wiki-test--write-double-id-fixture)
+   (let (queried)
+     (cl-letf (((symbol-function 'org-roam-node-from-id)
+                (lambda (id) (push id queried) 'fake-node))
+               ((symbol-function 'org-roam-backlinks-get)
+                (lambda (_node) '(fake-backlink)))
+               ((symbol-function 'org-roam-backlink-source-node)
+                (lambda (_bl) 'fake-src))
+               ((symbol-function 'org-roam-node-id)
+                (lambda (_src) "a23b4c5d-6e7f-8901-2345-67890abcdef0"))
+               ((symbol-function 'org-roam-node-title)
+                (lambda (_src) "Andrej Karpathy"))
+               ((symbol-function 'org-roam-node-file)
+                (lambda (_src) "/tmp/ak.org")))
+       (let ((via-file (org-wiki--backlinks org-wiki-test--file-level-id))
+             (via-heading (org-wiki--backlinks org-wiki-test--heading-id)))
+         (should via-file)
+         (should (equal via-file via-heading))
+         ;; Both roam queries used the canonical heading id.
+         (should (equal queried (list org-wiki-test--heading-id
+                                      org-wiki-test--heading-id))))))))
+
+(ert-deftest org-wiki-test-file-level-id-without-wiki-heading-errors ()
+  "A file-level id in a file with no :WIKI_KIND: heading is structured.
+It must signal `org-wiki-error', and the MCP rendering must be a
+typed payload that leaks neither the historical \"Before first
+headline\" user-error nor any buffer/file name."
+  (org-wiki-test-with-fixtures
+   (let ((file (org-wiki-test--write-fixture
+                "202606110010-mind-map.org"
+                org-wiki-test--file-id-only-node)))
+     (puthash "11111111-2222-4333-8444-555566667777" file org-id-locations)
+     (should-error
+      (org-wiki-read-node "11111111-2222-4333-8444-555566667777")
+      :type 'org-wiki-error)
+     (should-error
+      (org-wiki-node-metadata "11111111-2222-4333-8444-555566667777")
+      :type 'org-wiki-error)
+     (let* ((err (should-error
+                  (org-wiki-mcp--read-node-tool
+                   "11111111-2222-4333-8444-555566667777")
+                  :type 'mcp-server-lib-tool-error))
+            (payload (cadr err)))
+       (should (stringp payload))
+       (should (string-match-p "\"error\":\"not_a_wiki_node\"" payload))
+       (should-not (string-match-p "internal_error" payload))
+       (should-not (string-match-p "Before first headline" payload))
+       (should-not (string-match-p "mind-map" payload))))))
+
+(ert-deftest org-wiki-test-read-node-rejects-id-missing-from-file ()
+  "An id whose recorded file no longer contains it signals org-wiki-error.
+Covers the `:id_not_in_file' branch of `org-wiki--goto-id' (a stale
+`org-id-locations' entry)."
+  (org-wiki-test-with-fixtures
+   (let ((file (org-wiki-test--write-fixture
+                "concepts/202605131012-content-addressed-storage.org"
+                org-wiki-test--concept-node)))
+     (puthash "dddddddd-1111-2222-3333-444444444444" file org-id-locations)
+     (should-error
+      (org-wiki-read-node "dddddddd-1111-2222-3333-444444444444")
+      :type 'org-wiki-error))))
+
 ;;;; --- The org-ql property predicate ------------------------------
 
 (ert-deftest org-wiki-test-property-predicate-matches-existence ()

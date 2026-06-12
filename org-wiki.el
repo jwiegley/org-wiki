@@ -51,6 +51,14 @@
 ;;                           under `org-wiki-root' (the write-allowlist
 ;;                           boundary for the future mutation slice).
 ;;
+;; Two-id normalization: wiki node files on disk carry TWO ids.  The
+;; file-level lint conventions mandate a top-of-file :ID: drawer,
+;; while the node's canonical identity is the heading :ID: that
+;; carries :WIKI_KIND: (exactly one per file).  The read tools accept
+;; the file-level id as an alias and normalize it to the heading —
+;; `org-wiki-canonical-id' reports the heading id an alias resolves
+;; to, so agents can learn the id they should cite.
+;;
 ;; The read-only surface needs none of: file locking, write-ahead log,
 ;; recovery, hash discipline, sandboxing.  Those will be added in the
 ;; mutation slice once the read-only assumptions are verified.
@@ -206,6 +214,82 @@ live, so later visits (and `org-wiki--visit') can reuse them safely."
   (or (find-buffer-visiting file)
       (find-file-noselect file)))
 
+(defun org-wiki--id-line-regexp (id)
+  "Return a regexp matching the property-drawer `:ID:' line for ID."
+  (format "^[ \t]*:ID:[ \t]+%s\\b" (regexp-quote id)))
+
+(defun org-wiki--goto-wiki-heading ()
+  "Move point to the buffer's first heading with a `:WIKI_KIND:' property.
+Return point on success; return nil when the buffer has no wiki
+heading, leaving point at end of buffer."
+  (goto-char (point-min))
+  (let (found)
+    (while (and (not found) (outline-next-heading))
+      (when (org-entry-get nil "WIKI_KIND")
+        (setq found (point))))
+    found))
+
+(defun org-wiki--goto-id (id)
+  "Move point to the heading that owns ID in the current buffer.
+ID is matched as a property-drawer `:ID:' line.  Wiki node files
+carry a lint-mandated file-level `:ID:' drawer in addition to the
+heading id that carries `:WIKI_KIND:'; when ID names that top-of-file
+drawer — the match sits before the first headline — point is
+redirected to the file's `:WIKI_KIND:' heading (the architecture doc
+guarantees exactly one per file), so the file-level id acts as a
+read-path alias for the node.
+
+Return the canonical heading id: ID itself when it is heading-level,
+otherwise the `:ID:' of the heading redirected to.  Signal
+`org-wiki-error' with `:id_not_in_file' when ID does not occur in the
+buffer, and with `:not_a_wiki_node' when ID is file-level and the
+file has no `:WIKI_KIND:' heading to redirect to."
+  (goto-char (point-min))
+  (unless (re-search-forward (org-wiki--id-line-regexp id) nil t)
+    ;; Deliberately no file path in the payload: error payloads
+    ;; travel to whatever MCP client is connected.
+    (signal 'org-wiki-error (list :id_not_in_file id)))
+  (condition-case nil
+      (progn (org-back-to-heading t)
+             id)
+    ;; `org-back-to-heading' errors exactly when the match sits
+    ;; before the first headline, i.e. when ID is the file-level
+    ;; alias.  Probing with `org-before-first-heading-p' up front
+    ;; reads better but costs ~8% on the benched read-node hot path;
+    ;; this keeps the heading-id path's work byte-identical to the
+    ;; pre-alias code.  The handler body's own signals propagate —
+    ;; only the org-back-to-heading failure is caught, so its
+    ;; buffer-name-leaking message can never escape.
+    (error
+     (unless (org-wiki--goto-wiki-heading)
+       ;; Same privacy rule: the payload names the id, never the
+       ;; buffer or file.
+       (signal 'org-wiki-error (list :not_a_wiki_node id)))
+     (or (org-entry-get nil "ID") id))))
+
+(defun org-wiki--resolve-id (id)
+  "Return the canonical heading id for ID, or ID when it is not an alias.
+A warm `org-id-locations' lookup — never a corpus rescan, because
+this path backs `org-wiki--backlinks', which must keep accepting
+linker ids from outside the wiki id table — finds ID's file; when ID
+names the file-level drawer there and the file has a `:WIKI_KIND:'
+heading, that heading's `:ID:' is returned.  In every other case
+\(heading ids, unknown ids, files without a wiki heading) ID is
+returned unchanged; unlike `org-wiki-canonical-id' this never
+signals."
+  (let ((file (and (hash-table-p org-id-locations)
+                   (gethash id org-id-locations))))
+    (or (and file
+             (file-exists-p file)
+             (with-current-buffer (org-wiki--node-buffer file)
+               (save-excursion
+                 (goto-char (point-min))
+                 (and (re-search-forward (org-wiki--id-line-regexp id) nil t)
+                      (org-before-first-heading-p)
+                      (org-wiki--goto-wiki-heading)
+                      (org-entry-get nil "ID")))))
+        id)))
+
 (defun org-wiki--hash-property-name ()
   "Return the name of the hash property `org-hash' writes, if available.
 Returns nil when `org-hash' isn't loaded — in which case the read-only
@@ -346,24 +430,37 @@ no `:WIKI_KIND:' of their own."
                  :action #'org-wiki--node-at-point-summary))
 
 ;;;###autoload
-(defun org-wiki-read-node (id)
-  "Return the full body of the wiki node with ID as a plain-text string.
-The returned text is the node's whole subtree, including its property
-drawer.  Signals `org-wiki-error' if no node with that ID exists, or
-if it isn't a wiki node."
+(defun org-wiki-canonical-id (id)
+  "Return the canonical heading id of the wiki node that ID denotes.
+For a heading id this is ID itself.  For the lint-mandated file-level
+`:ID:' that wiki node files carry alongside the heading's own id, it
+is the `:ID:' of the file's `:WIKI_KIND:' heading — the id callers
+should cite in links and subsequent tool calls.  Signals
+`org-wiki-error' when ID cannot be located (`:unknown_id'), is absent
+from its recorded file (`:id_not_in_file'), or names a file with no
+wiki heading (`:not_a_wiki_node')."
   (let ((file (org-wiki--locate-id id)))
     (unless file
       (signal 'org-wiki-error (list :unknown_id id)))
     (with-current-buffer (org-wiki--node-buffer file)
       (save-excursion
-        (goto-char (point-min))
-        (unless (re-search-forward
-                 (format "^[ \t]*:ID:[ \t]+%s\\b" (regexp-quote id))
-                 nil t)
-          ;; Deliberately no file path in the payload: error payloads
-          ;; travel to whatever MCP client is connected.
-          (signal 'org-wiki-error (list :id_not_in_file id)))
-        (org-back-to-heading t)
+        (org-wiki--goto-id id)))))
+
+;;;###autoload
+(defun org-wiki-read-node (id)
+  "Return the full body of the wiki node with ID as a plain-text string.
+The returned text is the node's whole subtree, including its property
+drawer.  ID may be either the node's heading id or the lint-mandated
+file-level `:ID:' of its file; the latter is normalized to the file's
+`:WIKI_KIND:' heading, and `org-wiki-canonical-id' reports the
+heading id such an alias resolves to.  Signals `org-wiki-error' if no
+node with that ID exists, or if it isn't a wiki node."
+  (let ((file (org-wiki--locate-id id)))
+    (unless file
+      (signal 'org-wiki-error (list :unknown_id id)))
+    (with-current-buffer (org-wiki--node-buffer file)
+      (save-excursion
+        (org-wiki--goto-id id)
         (unless (org-wiki-node-p)
           (signal 'org-wiki-error (list :not_a_wiki_node id)))
         (save-restriction
@@ -373,21 +470,18 @@ if it isn't a wiki node."
 ;;;###autoload
 (defun org-wiki-node-metadata (id)
   "Return a plist of the property drawer of the wiki node with ID.
-Hash properties (any property whose name starts with \"HASH_\") are
-stripped unconditionally: the integrity hash is tool-maintained and is
-never surfaced through the metadata view, whether or not org-hash is
-loaded in this session."
+ID may be the heading id or its file-level alias (see
+`org-wiki-canonical-id'); either way the plist's :id entry carries
+the canonical heading id.  Hash properties (any property whose name
+starts with \"HASH_\") are stripped unconditionally: the integrity
+hash is tool-maintained and is never surfaced through the metadata
+view, whether or not org-hash is loaded in this session."
   (let ((file (org-wiki--locate-id id)))
     (unless file
       (signal 'org-wiki-error (list :unknown_id id)))
     (with-current-buffer (org-wiki--node-buffer file)
       (save-excursion
-        (goto-char (point-min))
-        (unless (re-search-forward
-                 (format "^[ \t]*:ID:[ \t]+%s\\b" (regexp-quote id))
-                 nil t)
-          (signal 'org-wiki-error (list :id_not_in_file id)))
-        (org-back-to-heading t)
+        (org-wiki--goto-id id)
         (let ((props (cl-remove-if
                       (lambda (kv)
                         (string-prefix-p "HASH_" (car kv) t))
@@ -405,6 +499,10 @@ Each plist has keys :from-id, :from-title and :from-file, so callers
 can visit the linking node without consulting the org-id locations
 table (linkers may live outside the wiki tree).
 
+ID is first normalized with `org-wiki--resolve-id': nothing links to
+the lint-mandated file-level alias, so querying it verbatim would
+return a misleading empty list instead of the node's real backlinks.
+
 Uses `org-roam-backlinks-get' when `org-roam' is loaded; otherwise
 returns nil and logs a message."
   (cond
@@ -412,7 +510,7 @@ returns nil and logs a message."
     (message "org-wiki--backlinks: org-roam not loaded; returning nil")
     nil)
    (t
-    (let* ((node (org-roam-node-from-id id))
+    (let* ((node (org-roam-node-from-id (org-wiki--resolve-id id)))
            (backlinks (and node (org-roam-backlinks-get node))))
       (mapcar (lambda (bl)
                 (let ((src (org-roam-backlink-source-node bl)))
