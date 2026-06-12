@@ -210,6 +210,47 @@ Code (connected via MCP), the four tools should appear under the
 configured server-id (`"default"` by default; see
 `org-wiki-mcp-server-id`).
 
+## Interactive commands
+
+`org-wiki-commands` adds Emacs commands for the same read-only
+operations. `consult`, `embark`, and `marginalia` are optional — the
+commands work with plain `completing-read` when they are absent (so the
+headless MCP Emacs never pulls in UI packages), and gain preview, an
+action menu, and annotations when they are present.
+
+| Command                  | What it does                                                       |
+|--------------------------|--------------------------------------------------------------------|
+| `org-wiki-search`        | Search wiki nodes and visit a result (semantic-first if available) |
+| `org-wiki-find`          | Pick a wiki node by title and visit it                             |
+| `org-wiki-backlinks`     | Visit a node that links to the node at point (or a chosen node)    |
+| `org-wiki-show-metadata` | Show a node's property drawer in a transient buffer                |
+
+`org-wiki-search` runs the semantic backend by default, falling back to
+a literal text match when the backend errors. With a prefix arg it
+skips the backend entirely and matches text literally — the predictable
+escape hatch when the embedding service is down. `org-wiki-backlinks`
+and `org-wiki-show-metadata` default to the node at point (an `id:` link
+or the enclosing wiki heading), and prompt only when there is none.
+
+The data functions behind these are `org-wiki--search` (semantic, with a
+literal fallback) and `org-wiki--backlinks`; the commands are thin
+front-ends over them.
+
+When `embark` is loaded, wiki candidates and `id:` links at point carry
+an action keymap (`org-wiki-node-map`) with: `v` visit, `o` visit in
+another window, `w` copy an `id:` link, `i` insert an `id:` link, `b`
+backlinks, `m` metadata.
+
+The four commands are gathered under a prefix keymap that is left
+unbound, so you can bind it wherever you like:
+
+```elisp
+(keymap-set global-map "C-c w" org-wiki-command-map)
+```
+
+This gives `C-c w s` / `f` / `b` / `m` for search / find / backlinks /
+metadata.
+
 ## Empirical implications for the architecture doc
 
 Sections of `../docs/org-llm-wiki.md` that this spike has *verified or

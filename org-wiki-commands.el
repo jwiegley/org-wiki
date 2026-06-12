@@ -153,10 +153,11 @@ errors.  With a prefix arg (LITERAL non-nil) the semantic backend is
 skipped entirely -- the predictable escape hatch when the embedding
 service is down.  A slow backend is interruptible with \\[keyboard-quit]."
   (interactive "sWiki search: \nP")
-  (let* ((files (org-wiki--candidate-files))
-         (results (if literal
-                      (seq-take (org-wiki--text-search query files) 100)
-                    (org-wiki--search query 100))))
+  (let ((results (if literal
+                     (seq-take (org-wiki--text-search
+                                query (org-wiki--candidate-files))
+                               100)
+                   (org-wiki--search query 100))))
     (if (null results)
         (message "org-wiki: no matches for %S" query)
       (let ((node (org-wiki--read (format "Wiki (%s): " query) results)))
@@ -290,6 +291,21 @@ Run once embark loads; safe to call repeatedly."
 ;; call `eval-after-load' indirectly so the integration stays a soft,
 ;; load-order-independent dependency.
 (funcall #'eval-after-load 'embark #'org-wiki--setup-embark)
+
+;;;; --- Prefix keymap (unbound; the user binds it) -----------------
+
+;;;###autoload (autoload 'org-wiki-command-map "org-wiki-commands" nil t 'keymap)
+(defvar org-wiki-command-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map "s" #'org-wiki-search)
+    (define-key map "f" #'org-wiki-find)
+    (define-key map "b" #'org-wiki-backlinks)
+    (define-key map "m" #'org-wiki-show-metadata)
+    map)
+  "Prefix keymap for org-wiki commands.
+Bind it where you like, e.g.:
+
+  (keymap-set global-map \"C-c w\" org-wiki-command-map)")
 
 (provide 'org-wiki-commands)
 ;;; org-wiki-commands.el ends here
