@@ -377,6 +377,116 @@ return literal matches."
                                    "4f1c3b8e-9ad2-4b7e-9d04-1a5e6f7c8b91"))
                         results))))))
 
+;; The two tests below exercise the REAL soft-require path — a fake
+;; org-ql-semantic.el written to a temp directory on `load-path' —
+;; rather than `cl-letf' stubs, which satisfy the `fboundp' probe and
+;; so never reach the load.
+
+(defvar org-wiki-test--semantic-fake-result nil
+  "File the fake org-ql-semantic library reports as its single hit.")
+
+(defvar org-wiki-test--semantic-load-attempts 0
+  "Number of times a fake org-ql-semantic library has been loaded.
+Each fake increments this at the top of its load, before anything
+that could fail, so the count records load ATTEMPTS.")
+
+(defconst org-wiki-test--semantic-fake-library "\
+;;; org-ql-semantic.el --- working test fake -*- lexical-binding: t; -*-
+ (setq org-wiki-test--semantic-load-attempts
+       (1+ org-wiki-test--semantic-load-attempts))
+ (defun org-ql-semantic-files (_query &optional _limit)
+   \"Return the file the test arranged in the fake-result variable.\"
+   (list org-wiki-test--semantic-fake-result))
+ (defun org-ql-semantic--match-score (_query)
+   \"Constant similarity score.\"
+   0.9)
+ (provide 'org-ql-semantic)
+"
+  "A minimal working org-ql-semantic, loadable from a temp directory.")
+
+(defconst org-wiki-test--semantic-broken-library "\
+;;; org-ql-semantic.el --- broken test fake -*- lexical-binding: t; -*-
+ (setq org-wiki-test--semantic-load-attempts
+       (1+ org-wiki-test--semantic-load-attempts))
+ (error \"Fake org-ql-semantic is deliberately broken\")
+ (provide 'org-ql-semantic)
+"
+  "An org-ql-semantic whose load signals before defining anything.")
+
+(defun org-wiki-test--with-fake-semantic-library (content body)
+  "Run BODY thunk with a fake org-ql-semantic of CONTENT on `load-path'.
+Starts from a clean slate — feature and functions unbound, the
+load-attempt counter zeroed, the failed-require memo cleared — and
+restores all of it afterward.  Callers must `skip-unless' the real
+library is not loaded."
+  (let ((libdir (make-temp-file "org-wiki-fake-semantic-" t)))
+    (with-temp-file (expand-file-name "org-ql-semantic.el" libdir)
+      (insert content))
+    (fmakunbound 'org-ql-semantic-files)
+    (fmakunbound 'org-ql-semantic--match-score)
+    (setq org-wiki-test--semantic-load-attempts 0)
+    (setq org-wiki--semantic-require-failed nil)
+    (push libdir load-path)
+    (unwind-protect
+        (funcall body)
+      (setq load-path (delete libdir load-path))
+      (setq features (delq 'org-ql-semantic features))
+      (fmakunbound 'org-ql-semantic-files)
+      (fmakunbound 'org-ql-semantic--match-score)
+      (setq org-wiki--semantic-require-failed nil)
+      (delete-directory libdir t))))
+
+(ert-deftest org-wiki-test-semantic-search-loads-library-on-first-use ()
+  "`org-wiki--search' soft-loads an installed-but-unloaded backend.
+The availability probe must attempt a `require' of a library that
+sits on `load-path' but has not been loaded — a bare `fboundp' probe
+would silently skip the semantic backend for the whole session.  The
+query matches nothing literally, so the test fails unless the fake
+library is actually loaded and its results returned."
+  (skip-unless (not (featurep 'org-ql-semantic)))
+  (org-wiki-test-with-fixtures
+   (let ((file (org-wiki-test--write-fixture
+                "concepts/202605131012-content-addressed-storage.org"
+                org-wiki-test--concept-node)))
+     (org-wiki-test--ensure-semantic-predicate)
+     (org-wiki-test--with-fake-semantic-library
+      org-wiki-test--semantic-fake-library
+      (lambda ()
+        (should-not (fboundp 'org-ql-semantic-files))
+        (let* ((org-wiki-test--semantic-fake-result file)
+               (results (org-wiki--search "zzz-semantic-load-probe" 5)))
+          (should (= org-wiki-test--semantic-load-attempts 1))
+          (should-not org-wiki--semantic-require-failed)
+          (should (= 1 (length results)))
+          (should (string= (plist-get (car results) :id)
+                           "4f1c3b8e-9ad2-4b7e-9d04-1a5e6f7c8b91"))))))))
+
+(ert-deftest org-wiki-test-semantic-search-broken-library-memoized ()
+  "A present-but-broken org-ql-semantic is negative-cached.
+A library whose top level signals during load must degrade the
+search to the text fallback AND set the failed-require memo;
+otherwise every subsequent search pays a full load attempt before
+falling back."
+  (skip-unless (not (featurep 'org-ql-semantic)))
+  (org-wiki-test-with-fixtures
+   (org-wiki-test--write-fixture
+    "concepts/202605131012-content-addressed-storage.org"
+    org-wiki-test--concept-node)
+   (org-wiki-test--with-fake-semantic-library
+    org-wiki-test--semantic-broken-library
+    (lambda ()
+      ;; First search: load attempted once, fails, falls back to text.
+      (let ((results (org-wiki--search "Content" 5)))
+        (should (cl-some (lambda (r)
+                           (string= (plist-get r :id)
+                                    "4f1c3b8e-9ad2-4b7e-9d04-1a5e6f7c8b91"))
+                         results)))
+      (should (= org-wiki-test--semantic-load-attempts 1))
+      (should org-wiki--semantic-require-failed)
+      ;; Second search: the failure is remembered; no re-attempt.
+      (org-wiki--search "Content" 5)
+      (should (= org-wiki-test--semantic-load-attempts 1))))))
+
 ;;;; --- Reading ----------------------------------------------------
 
 (ert-deftest org-wiki-test-read-node-returns-body ()

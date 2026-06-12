@@ -326,21 +326,29 @@ Empty string if no such subheading exists."
 ;;;; --- Discovery tools --------------------------------------------
 
 (defvar org-wiki--semantic-require-failed nil
-  "Non-nil after a soft `require' of org-ql-semantic has failed.
-Caps the failed library probe at once per session: search sits on
-hot paths (every MCP call, the benchmark and fuzz harnesses), and a
-missing library would otherwise re-scan `load-path' on every query.")
+  "Non-nil after a soft load of org-ql-semantic has failed.
+Set whether the library is absent from `load-path' or present but
+broken (its load signaled an error).  Caps the failed library probe
+at once per session: search sits on hot paths (every MCP call, the
+benchmark and fuzz harnesses), and a failing library would otherwise
+re-scan `load-path' — or re-attempt a full load — on every query.")
 
 (defun org-wiki--semantic-available-p ()
   "Return non-nil when the org-ql-semantic backend can be used.
 Loads the library on first use when it is present on `load-path' but
 not yet loaded — a deferred `use-package' configuration still applies
-through `eval-after-load'.  When the library is absent the failed
-probe is remembered and not repeated, though a later in-session load
-is still picked up via `fboundp'."
+through `eval-after-load'.  Any failed load — the library absent, or
+present but signaling during load — is remembered and not repeated,
+though a later in-session load is still picked up via `fboundp'."
   (cond ((fboundp 'org-ql-semantic-files) t)
         (org-wiki--semantic-require-failed nil)
-        ((require 'org-ql-semantic nil t) t)
+        ;; NOERROR only covers a missing file; a present-but-broken
+        ;; library signals out of `require' and must be caught here,
+        ;; or it escapes to the caller and the memo is never set.
+        ((condition-case nil
+             (require 'org-ql-semantic nil t)
+           (error nil))
+         t)
         (t (setq org-wiki--semantic-require-failed t)
            nil)))
 
