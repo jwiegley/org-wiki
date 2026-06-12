@@ -32,10 +32,10 @@ mutation slice would depend on.
 
 ## What it verified
 
-All 21 ERT tests pass (one is skipped when the optional `org-hash`
-isn't present) against Emacs 30.2 with `mcp-server-lib` 0.4.0,
-`org-roam`, and `org-ql`. The tests double as empirical verification
-of architecture-doc claims.
+All 46 ERT tests pass (some are skipped when the optional `org-hash`,
+`consult`, or `embark` aren't present) against Emacs 30.2 with
+`mcp-server-lib` 0.4.0, `org-roam`, and `org-ql`. The tests double as
+empirical verification of architecture-doc claims.
 
 ### ✅ `(property "WIKI_KIND")` matches by existence
 
@@ -185,9 +185,10 @@ load path:
 nix develop --command make test
 ```
 
-Expected output: `Ran 21 tests, 20 results as expected, 0 unexpected,
-1 skipped`. (The `org-hash` test is skipped unless that package is
-present; it is optional and not part of the pinned toolchain.)
+Expected output: `Ran 46 tests, 42 results as expected, 0 unexpected,
+4 skipped`. (The `org-hash` test and the consult/embark integration
+tests are skipped unless those packages are present; they are optional
+and not part of the pinned toolchain.)
 
 ## How to use it interactively
 
@@ -213,10 +214,13 @@ configured server-id (`"default"` by default; see
 ## Interactive commands
 
 `org-wiki-commands` adds Emacs commands for the same read-only
-operations. `consult`, `embark`, and `marginalia` are optional — the
-commands work with plain `completing-read` when they are absent (so the
-headless MCP Emacs never pulls in UI packages), and gain preview, an
-action menu, and annotations when they are present.
+operations. `consult` and `embark` are optional — the commands work
+with plain `completing-read` when they are absent (so the headless MCP
+Emacs never pulls in UI packages). With `consult` loaded, the picker
+previews each candidate node as the selection moves; with `embark`,
+candidates and `id:` links at point gain an action menu. Kind and
+summary annotations are built into the completion table itself, so
+they appear with or without `marginalia`.
 
 | Command                  | What it does                                                       |
 |--------------------------|--------------------------------------------------------------------|
@@ -237,15 +241,17 @@ literal fallback) and `org-wiki--backlinks`; the commands are thin
 front-ends over them.
 
 When `embark` is loaded, wiki candidates and `id:` links at point carry
-an action keymap (`org-wiki-node-map`) with: `v` visit, `o` visit in
-another window, `w` copy an `id:` link, `i` insert an `id:` link, `b`
-backlinks, `m` metadata.
+an action keymap (`org-wiki-node-map`) with: `v` (or `RET`) visit, `o`
+visit in another window, `w` copy an `id:` link, `i` insert an `id:`
+link, `b` backlinks, `m` metadata.
 
 The four commands are gathered under a prefix keymap that is left
-unbound, so you can bind it wherever you like:
+unbound, so you can bind it wherever you like — bind the quoted
+symbol, which works whether `org-wiki-commands` is already loaded or
+still pending autoload:
 
 ```elisp
-(keymap-set global-map "C-c w" org-wiki-command-map)
+(keymap-set global-map "C-c w" 'org-wiki-command-map)
 ```
 
 This gives `C-c w s` / `f` / `b` / `m` for search / find / backlinks /

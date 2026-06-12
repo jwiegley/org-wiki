@@ -11,10 +11,14 @@
 
 ;;; Commentary:
 
-;; Interactive front-ends for the org-wiki data core.  `consult',
-;; `embark' and `marginalia' are optional: this file loads and works
-;; without them (plain `completing-read', no preview, no embark menu),
-;; so the headless MCP Emacs never pulls in UI packages.
+;; Interactive front-ends for the org-wiki data core.  `consult' and
+;; `embark' are optional: this file loads and works without them
+;; (plain `completing-read', no preview, no embark menu), so the
+;; headless MCP Emacs never pulls in UI packages.  With consult
+;; loaded, the picker previews each candidate node as the selection
+;; moves; with embark, candidates and id: links at point gain an
+;; action menu.  Kind and summary annotations are built into the
+;; completion table itself and need no extra package.
 ;;
 ;; This file holds the shared candidate layer (enumerate, read,
 ;; visit) and the interactive commands built on top of it.
@@ -26,6 +30,8 @@
 (require 'org-wiki)
 
 (declare-function org-ql-select "org-ql")
+(declare-function consult--read "ext:consult")
+(declare-function consult--jump-preview "ext:consult")
 
 ;;;; --- Candidate layer --------------------------------------------
 
@@ -43,13 +49,15 @@ the embedding-free enumeration; it never contacts the semantic backend."
                  :action #'org-wiki--node-at-point-plist))
 
 (defun org-wiki--read (prompt nodes)
-  "Use PROMPT to read one of NODES via `completing-read'.
+  "Use PROMPT to read one of NODES in the minibuffer.
 Return the chosen node's plist, or nil when NODES is empty.
 Candidate strings carry their node on the `org-wiki-node' text property
 \(for embark) and are mapped back through an alist (robust to
 property-stripping completion UIs).  Duplicate titles get a faded
 suffix derived from the node id plus a counter, so every display
-string is unique."
+string is unique.  When consult is loaded, the read goes through
+`consult--read' with a live preview of the candidate node (see
+`org-wiki--consult-read'); otherwise plain `completing-read'."
   (when nodes
     (let ((seen (make-hash-table :test #'equal))
           cands alist)
@@ -73,10 +81,12 @@ string is unique."
           (push disp cands)
           (push (cons (substring-no-properties disp) node) alist)))
       (setq cands (nreverse cands))
-      (let ((choice (completing-read prompt
+      (if (and (featurep 'consult) (fboundp 'consult--read))
+          (org-wiki--consult-read prompt cands alist)
+        (cdr (assoc (completing-read prompt
                                      (org-wiki--completion-table cands)
-                                     nil t)))
-        (cdr (assoc choice alist))))))
+                                     nil t)
+                    alist))))))
 
 (defun org-wiki--completion-table (candidates)
   "Return a completion table over CANDIDATES with node metadata."
@@ -123,16 +133,41 @@ string is unique."
         (org-fold-show-context 'org-goto)
         (recenter)))))
 
+(defun org-wiki--target-at-point ()
+  "Return (ID BEG . END) for the wiki node target at point, or nil.
+ID comes from an id: link at point, or from the enclosing wiki
+heading; BEG..END is the buffer extent of the link (sans trailing
+whitespace), or of the heading line.  Return nil when point is on
+neither, or when not in an Org buffer."
+  (when (derived-mode-p 'org-mode)
+    (let ((ctx (org-element-context)))
+      (cond
+       ((and (eq (org-element-type ctx) 'link)
+             (string= (org-element-property :type ctx) "id"))
+        (cons (org-element-property :path ctx)
+              (cons (org-element-property :begin ctx)
+                    (- (org-element-property :end ctx)
+                       (or (org-element-property :post-blank ctx) 0)))))
+       ((and (not (org-before-first-heading-p))
+             (org-entry-get nil "WIKI_KIND")
+             (org-entry-get nil "ID"))
+        (cons (org-entry-get nil "ID")
+              (save-excursion
+                (org-back-to-heading t)
+                (cons (point) (line-end-position)))))))))
+
 (defun org-wiki--id-at-point ()
   "Return a wiki node id at point: an id: link, or the enclosing heading.
 Return nil when point is on neither, or when not in an Org buffer."
-  (when (derived-mode-p 'org-mode)
-    (or (let ((ctx (org-element-context)))
-          (and (eq (org-element-type ctx) 'link)
-               (string= (org-element-property :type ctx) "id")
-               (org-element-property :path ctx)))
-        (and (org-entry-get nil "WIKI_KIND")
-             (org-entry-get nil "ID")))))
+  (car (org-wiki--target-at-point)))
+
+(defun org-wiki--read-id (prompt)
+  "Return a wiki node id from point, or read one with PROMPT.
+Prefers an id: link or the enclosing wiki heading at point; with
+neither, prompt with the full node picker.  Return nil when the
+picker has no nodes to offer."
+  (or (org-wiki--id-at-point)
+      (plist-get (org-wiki--read prompt (org-wiki--all-nodes)) :id)))
 
 ;;;; --- Commands ---------------------------------------------------
 
@@ -169,17 +204,18 @@ service is down.  A slow backend is interruptible with \\[keyboard-quit]."
 Interactively, ID defaults to the node at point (an id: link or the
 enclosing wiki heading); with none, prompt for a node."
   (interactive)
-  (let* ((id (or id (org-wiki--id-at-point)
-                 (plist-get (org-wiki--read "Backlinks to: "
-                                            (org-wiki--all-nodes))
-                            :id))))
+  (let ((id (or id (org-wiki--read-id "Backlinks to: "))))
     (unless id (user-error "org-wiki: No node specified"))
     (let ((links (org-wiki--backlinks id)))
       (if (null links)
           (message "org-wiki: no backlinks to %s" id)
         (let* ((nodes (mapcar (lambda (bl)
+                                ;; :file lets `org-wiki--visit' reach
+                                ;; linkers outside the wiki tree without
+                                ;; an org-id locations lookup.
                                 (list :id (plist-get bl :from-id)
-                                      :title (plist-get bl :from-title)))
+                                      :title (plist-get bl :from-title)
+                                      :file (plist-get bl :from-file)))
                               links))
                (node (org-wiki--read "Backlink: " nodes)))
           (when node (org-wiki--visit node)))))))
@@ -190,10 +226,7 @@ enclosing wiki heading); with none, prompt for a node."
 Interactively, ID defaults to the node at point, else prompts.  Hash
 properties are already stripped by `org-wiki-node-metadata'."
   (interactive)
-  (let* ((id (or id (org-wiki--id-at-point)
-                 (plist-get (org-wiki--read "Metadata for: "
-                                            (org-wiki--all-nodes))
-                            :id))))
+  (let ((id (or id (org-wiki--read-id "Metadata for: "))))
     (unless id (user-error "org-wiki: No node specified"))
     (let ((meta (org-wiki-node-metadata id)))
       (with-current-buffer (get-buffer-create "*org-wiki-metadata*")
@@ -206,17 +239,84 @@ properties are already stripped by `org-wiki-node-metadata'."
         (special-mode)
         (display-buffer (current-buffer))))))
 
+;;;; --- consult integration (optional) -----------------------------
+
+(defun org-wiki--consult-read (prompt cands alist)
+  "Select from CANDS with PROMPT via `consult--read', previewing nodes.
+ALIST maps each candidate string to its node plist; the chosen
+node's plist is returned.  As the selection moves, the candidate
+node's heading is shown in the originating window and restored
+afterwards (see `org-wiki--preview-state').  Only called once
+consult is loaded."
+  (consult--read (org-wiki--completion-table cands)
+                 :prompt prompt
+                 :require-match t
+                 :category 'org-wiki-node
+                 :lookup (lambda (cand &rest _) (cdr (assoc cand alist)))
+                 :state (org-wiki--preview-state)))
+
+(defun org-wiki--preview-state ()
+  "Return a consult state function that previews wiki nodes.
+The returned function receives the looked-up node plist as its
+preview candidate (`org-wiki--consult-read''s :lookup resolves
+candidate strings before consult hands them to the state function)
+and delegates to `consult--jump-preview' with a marker at the node's
+heading.  Nodes that cannot be located preview nothing rather than
+erroring.  No jump happens on exit: the calling command decides
+whether and how to visit the selected node."
+  (let ((jump (consult--jump-preview)))
+    (lambda (action cand)
+      (funcall jump action
+               (and (eq action 'preview)
+                    cand
+                    (org-wiki--preview-marker cand))))))
+
+(defun org-wiki--preview-marker (node)
+  "Return a marker at NODE's heading for previewing, or nil.
+Reuses or quietly opens the node's file buffer; the buffer is left
+open so repeated previews are cheap.  Degrades to nil — no preview —
+when NODE has no :file and `org-wiki--locate-id' cannot find its id
+\(backlink plists from outside the corpus may carry only :id)."
+  (let* ((id (plist-get node :id))
+         (file (or (plist-get node :file)
+                   (and id (org-wiki--locate-id id)))))
+    (when (and file (file-exists-p file))
+      (with-current-buffer (org-wiki--node-buffer file)
+        (org-with-wide-buffer
+         (goto-char (or (and id (org-find-entry-with-id id))
+                        (plist-get node :point)
+                        (point-min)))
+         (point-marker))))))
+
 ;;;; --- embark integration (optional) ------------------------------
 
 (defvar embark-keymap-alist)
 (defvar embark-target-finders)
+(defvar embark-transformer-alist)
 
 (defun org-wiki--embark-node (cand)
   "Resolve embark CAND (a candidate string or a bare id) to a node plist.
-Return nil for empty input; callers then `user-error' on the missing id."
+Return nil for empty input; the visit and link actions then signal
+`user-error', while the backlink and metadata actions fall back to
+prompting for a node."
   (and (stringp cand) (> (length cand) 0)
        (or (get-text-property 0 'org-wiki-node cand)
            (list :id cand))))
+
+(defun org-wiki--embark-transform (type target)
+  "Rewrite embark TARGET of type TYPE to the wiki node id it carries.
+Embark computes minibuffer targets from the completion table's
+propertized candidate strings but strips text properties when
+injecting the target into an action, so an action would otherwise
+receive the display title rather than anything resolvable.
+Rewriting the target to the node's id here, while the property is
+still attached, means every action receives a bare id —
+`org-wiki--embark-node''s fallback.  Targets without the property
+\(at-point targets are already bare ids) pass through unchanged."
+  (cons type
+        (or (and (stringp target) (> (length target) 0)
+                 (plist-get (get-text-property 0 'org-wiki-node target) :id))
+            target)))
 
 (defun org-wiki--title-of (id)
   "Return the title of the node with ID, or ID itself if unknown.
@@ -226,10 +326,14 @@ Scans every candidate file via `org-wiki--all-nodes'; do not call in a loop."
       id))
 
 (defun org-wiki--node-link (node)
-  "Return an Org id: link string for NODE."
-  (let* ((id (plist-get node :id))
-         (title (or (plist-get node :title) (org-wiki--title-of id))))
-    (format "[[id:%s][%s]]" id title)))
+  "Return an Org id: link string for NODE.
+Signal `user-error' when NODE is nil or carries no id, rather than
+rendering a malformed [[id:nil][nil]] link."
+  (let ((id (plist-get node :id)))
+    (unless id
+      (user-error "org-wiki: No node id to link to"))
+    (format "[[id:%s][%s]]" id
+            (or (plist-get node :title) (org-wiki--title-of id)))))
 
 (defun org-wiki-embark-visit (cand)
   "Visit the wiki node named by embark CAND."
@@ -265,6 +369,7 @@ Scans every candidate file via `org-wiki--all-nodes'; do not call in a loop."
 
 (defvar org-wiki-node-map
   (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "RET") #'org-wiki-embark-visit)
     (define-key map "v" #'org-wiki-embark-visit)
     (define-key map "o" #'org-wiki-embark-visit-other)
     (define-key map "w" #'org-wiki-embark-copy-link)
@@ -272,19 +377,27 @@ Scans every candidate file via `org-wiki--all-nodes'; do not call in a loop."
     (define-key map "b" #'org-wiki-embark-backlinks)
     (define-key map "m" #'org-wiki-embark-metadata)
     map)
-  "Embark action keymap for `org-wiki-node' targets.")
+  "Embark action keymap for `org-wiki-node' targets.
+RET defaults to visiting the node.")
 
 (defun org-wiki--embark-target-at-point ()
-  "Embark target finder: an id: link or wiki heading at point."
-  (let ((id (org-wiki--id-at-point)))
-    (when id
-      (cons 'org-wiki-node (cons id (cons (point) (point)))))))
+  "Embark target finder: an id: link or wiki heading at point.
+Return (org-wiki-node ID BEG . END) where BEG..END is the extent of
+the link, or of the heading line, so embark highlights the real
+target."
+  (let ((target (org-wiki--target-at-point)))
+    (when target
+      (cons 'org-wiki-node target))))
 
 (defun org-wiki--setup-embark ()
-  "Register the wiki action keymap and target finder with embark.
-Run once embark loads; safe to call repeatedly."
+  "Register the wiki keymap, target finder and transformer with embark.
+Run once embark loads; safe to call repeatedly.  The transformer is
+what guarantees actions get a node id rather than a display title —
+see `org-wiki--embark-transform'."
   (add-to-list 'embark-keymap-alist '(org-wiki-node . org-wiki-node-map))
-  (add-to-list 'embark-target-finders #'org-wiki--embark-target-at-point))
+  (add-to-list 'embark-target-finders #'org-wiki--embark-target-at-point)
+  (add-to-list 'embark-transformer-alist
+               '(org-wiki-node . org-wiki--embark-transform)))
 
 ;; Defer the embark hookup until embark itself loads, without a literal
 ;; `with-eval-after-load' form (which package-lint forbids in packages):
@@ -303,9 +416,16 @@ Run once embark loads; safe to call repeatedly."
     (define-key map "m" #'org-wiki-show-metadata)
     map)
   "Prefix keymap for org-wiki commands.
-Bind it where you like, e.g.:
+The symbol also carries the keymap in its function cell (matching
+the autoload cookie above), so binding the quoted symbol works both
+before and after this file loads:
 
-  (keymap-set global-map \"C-c w\" org-wiki-command-map)")
+  (keymap-set global-map \"C-c w\" \\='org-wiki-command-map)")
+
+;; Honor the autoload cookie's promise of a function-cell keymap: the
+;; deferred `(autoload ... 'keymap)' path errors at the keystroke if
+;; loading this file leaves the symbol's function cell empty.
+(fset 'org-wiki-command-map org-wiki-command-map)
 
 (provide 'org-wiki-commands)
 ;;; org-wiki-commands.el ends here

@@ -72,6 +72,7 @@
 (declare-function org-roam-backlink-source-node "org-roam-mode" (backlink) t)
 (declare-function org-roam-node-id "org-roam-node" (node) t)
 (declare-function org-roam-node-title "org-roam-node" (node) t)
+(declare-function org-roam-node-file "org-roam-node" (node) t)
 (declare-function org-ql-semantic-files "ext:org-ql-semantic")
 (declare-function org-ql-semantic--sort-by-score "ext:org-ql-semantic")
 (declare-function org-hash-property "ext:org-hash")
@@ -347,7 +348,9 @@ loaded in this session."
 
 (defun org-wiki--backlinks (id)
   "Return a list of plists describing backlinks to the wiki node with ID.
-Each plist has keys :from-id and :from-title.
+Each plist has keys :from-id, :from-title and :from-file, so callers
+can visit the linking node without consulting the org-id locations
+table (linkers may live outside the wiki tree).
 
 Uses `org-roam-backlinks-get' when `org-roam' is loaded; otherwise
 returns nil and logs a message."
@@ -361,7 +364,8 @@ returns nil and logs a message."
       (mapcar (lambda (bl)
                 (let ((src (org-roam-backlink-source-node bl)))
                   (list :from-id    (org-roam-node-id src)
-                        :from-title (org-roam-node-title src))))
+                        :from-title (org-roam-node-title src)
+                        :from-file  (org-roam-node-file src))))
               backlinks)))))
 
 ;;;; --- Error type -------------------------------------------------

@@ -300,6 +300,31 @@ depend on org-hash being loaded — it is optional at runtime."
                 do (should-not (string-prefix-p ":hash_"
                                                 (symbol-name key))))))))
 
+;;;; --- Backlinks ---------------------------------------------------
+
+(ert-deftest org-wiki-test-backlinks-plist-shape ()
+  "`org-wiki--backlinks' returns :from-id/:from-title/:from-file plists.
+org-roam itself is stubbed: this pins the plist shape that both the
+MCP backlinks tool and `org-wiki-backlinks' consume, including the
+:from-file key the interactive command uses to visit linkers without
+an org-id locations lookup."
+  (cl-letf (((symbol-function 'org-roam-node-from-id)
+             (lambda (_id) 'fake-node))
+            ((symbol-function 'org-roam-backlinks-get)
+             (lambda (_node) '(fake-backlink)))
+            ((symbol-function 'org-roam-backlink-source-node)
+             (lambda (_bl) 'fake-src))
+            ((symbol-function 'org-roam-node-id)
+             (lambda (_src) "a23b4c5d-6e7f-8901-2345-67890abcdef0"))
+            ((symbol-function 'org-roam-node-title)
+             (lambda (_src) "Andrej Karpathy"))
+            ((symbol-function 'org-roam-node-file)
+             (lambda (_src) "/tmp/ak.org")))
+    (should (equal (org-wiki--backlinks "4f1c3b8e-9ad2-4b7e-9d04-1a5e6f7c8b91")
+                   '((:from-id "a23b4c5d-6e7f-8901-2345-67890abcdef0"
+                               :from-title "Andrej Karpathy"
+                               :from-file "/tmp/ak.org"))))))
+
 ;;;; --- The org-ql property predicate ------------------------------
 
 (ert-deftest org-wiki-test-property-predicate-matches-existence ()
