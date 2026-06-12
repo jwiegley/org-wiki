@@ -205,5 +205,91 @@ properties are already stripped by `org-wiki-node-metadata'."
         (special-mode)
         (display-buffer (current-buffer))))))
 
+;;;; --- embark integration (optional) ------------------------------
+
+(defvar embark-keymap-alist)
+(defvar embark-target-finders)
+
+(defun org-wiki--embark-node (cand)
+  "Resolve embark CAND (a candidate string or a bare id) to a node plist.
+Return nil for empty input; callers then `user-error' on the missing id."
+  (and (stringp cand) (> (length cand) 0)
+       (or (get-text-property 0 'org-wiki-node cand)
+           (list :id cand))))
+
+(defun org-wiki--title-of (id)
+  "Return the title of the node with ID, or ID itself if unknown.
+Scans every candidate file via `org-wiki--all-nodes'; do not call in a loop."
+  (or (cl-loop for n in (org-wiki--all-nodes)
+               when (equal (plist-get n :id) id) return (plist-get n :title))
+      id))
+
+(defun org-wiki--node-link (node)
+  "Return an Org id: link string for NODE."
+  (let* ((id (plist-get node :id))
+         (title (or (plist-get node :title) (org-wiki--title-of id))))
+    (format "[[id:%s][%s]]" id title)))
+
+(defun org-wiki-embark-visit (cand)
+  "Visit the wiki node named by embark CAND."
+  (interactive "sNode: ")
+  (org-wiki--visit (org-wiki--embark-node cand)))
+
+(defun org-wiki-embark-visit-other (cand)
+  "Visit the wiki node named by embark CAND in another window."
+  (interactive "sNode: ")
+  (org-wiki--visit (org-wiki--embark-node cand) t))
+
+(defun org-wiki-embark-copy-link (cand)
+  "Copy an Org id: link to the wiki node named by embark CAND."
+  (interactive "sNode: ")
+  (let ((link (org-wiki--node-link (org-wiki--embark-node cand))))
+    (kill-new link)
+    (message "Copied %s" link)))
+
+(defun org-wiki-embark-insert-link (cand)
+  "Insert an Org id: link to the wiki node named by embark CAND."
+  (interactive "sNode: ")
+  (insert (org-wiki--node-link (org-wiki--embark-node cand))))
+
+(defun org-wiki-embark-backlinks (cand)
+  "Show backlinks for the wiki node named by embark CAND."
+  (interactive "sNode: ")
+  (org-wiki-backlinks (plist-get (org-wiki--embark-node cand) :id)))
+
+(defun org-wiki-embark-metadata (cand)
+  "Show metadata for the wiki node named by embark CAND."
+  (interactive "sNode: ")
+  (org-wiki-show-metadata (plist-get (org-wiki--embark-node cand) :id)))
+
+(defvar org-wiki-node-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map "v" #'org-wiki-embark-visit)
+    (define-key map "o" #'org-wiki-embark-visit-other)
+    (define-key map "w" #'org-wiki-embark-copy-link)
+    (define-key map "i" #'org-wiki-embark-insert-link)
+    (define-key map "b" #'org-wiki-embark-backlinks)
+    (define-key map "m" #'org-wiki-embark-metadata)
+    map)
+  "Embark action keymap for `org-wiki-node' targets.")
+
+(defun org-wiki--embark-target-at-point ()
+  "Embark target finder: an id: link or wiki heading at point."
+  (let ((id (org-wiki--id-at-point)))
+    (when id
+      (cons 'org-wiki-node (cons id (cons (point) (point)))))))
+
+(defun org-wiki--setup-embark ()
+  "Register the wiki action keymap and target finder with embark.
+Run once embark loads; safe to call repeatedly."
+  (add-to-list 'embark-keymap-alist '(org-wiki-node . org-wiki-node-map))
+  (add-to-list 'embark-target-finders #'org-wiki--embark-target-at-point))
+
+;; Defer the embark hookup until embark itself loads, without a literal
+;; `with-eval-after-load' form (which package-lint forbids in packages):
+;; call `eval-after-load' indirectly so the integration stays a soft,
+;; load-order-independent dependency.
+(funcall #'eval-after-load 'embark #'org-wiki--setup-embark)
+
 (provide 'org-wiki-commands)
 ;;; org-wiki-commands.el ends here

@@ -137,5 +137,49 @@
        (should (string-match-p "Concept" text))
        (should-not (string-match-p "hash_" (downcase text)))))))
 
+(ert-deftest org-wiki-commands-test-copy-link ()
+  "The copy action puts a well-formed id: link on the kill-ring."
+  (org-wiki-test-with-fixtures
+   (org-wiki-test--write-fixture "concepts/202605131012-cas.org"
+                                 org-wiki-test--concept-node)
+   (let* ((node (cl-find "Content-Addressed Storage" (org-wiki--all-nodes)
+                         :key (lambda (n) (plist-get n :title))
+                         :test #'string=))
+          (cand (propertize (plist-get node :title) 'org-wiki-node node))
+          (kill-ring nil)
+          (kill-ring-yank-pointer nil)
+          (interprogram-cut-function nil)
+          (interprogram-paste-function nil))
+     (org-wiki-embark-copy-link cand)
+     (should (string= (current-kill 0)
+                      (format "[[id:%s][Content-Addressed Storage]]"
+                              (plist-get node :id)))))))
+
+(ert-deftest org-wiki-commands-test-insert-link ()
+  "The insert action inserts a well-formed id: link at point."
+  (org-wiki-test-with-fixtures
+   (org-wiki-test--write-fixture "concepts/202605131012-cas.org"
+                                 org-wiki-test--concept-node)
+   (let* ((node (cl-find "Content-Addressed Storage" (org-wiki--all-nodes)
+                         :key (lambda (n) (plist-get n :title))
+                         :test #'string=))
+          (cand (propertize (plist-get node :title) 'org-wiki-node node)))
+     (with-temp-buffer
+       (org-wiki-embark-insert-link cand)
+       (should (string= (buffer-string)
+                        (format "[[id:%s][Content-Addressed Storage]]"
+                                (plist-get node :id))))))))
+
+(ert-deftest org-wiki-commands-test-loads-headless ()
+  "The four autoloaded commands work with consult/embark/marginalia absent.
+The embark actions are intentionally not autoloaded, so they are not checked."
+  (should-not (featurep 'consult))
+  (should-not (featurep 'embark))
+  (should-not (featurep 'marginalia))
+  (should (commandp 'org-wiki-find))
+  (should (commandp 'org-wiki-search))
+  (should (commandp 'org-wiki-backlinks))
+  (should (commandp 'org-wiki-show-metadata)))
+
 (provide 'org-wiki-commands-test)
 ;;; org-wiki-commands-test.el ends here
