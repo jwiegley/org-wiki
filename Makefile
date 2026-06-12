@@ -7,8 +7,8 @@
 EMACS ?= emacs
 BATCH := $(EMACS) -Q --batch -L .
 
-PKG_FILES   := org-wiki.el org-wiki-mcp.el org-wiki-commands.el
-TEST_FILES  := org-wiki-test.el org-wiki-commands-test.el
+PKG_FILES   := org-wiki.el org-wiki-mcp.el org-wiki-commands.el org-wiki-gptel.el
+TEST_FILES  := org-wiki-test.el org-wiki-commands-test.el org-wiki-gptel-test.el
 SCRIPT_EL   := $(wildcard scripts/*.el)
 SH_FILES    := $(wildcard scripts/*.sh)
 NIX_FILES   := $(wildcard *.nix)

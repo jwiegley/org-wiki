@@ -55,9 +55,11 @@
               relint
               # Optional integrations exercised by the skip-unless-guarded
               # integration tests; present here so those tests run in the
-              # gates rather than skipping.
+              # gates rather than skipping.  gptel stays out of
+              # runtimeDeps: org-wiki-gptel.el is a soft dependency.
               consult
               embark
+              gptel
             ];
 
           emacsForDev = emacsPackages.emacsWithPackages (epkgs: runtimeDeps epkgs ++ devDeps epkgs);
@@ -68,6 +70,7 @@
               ./org-wiki.el
               ./org-wiki-mcp.el
               ./org-wiki-commands.el
+              ./org-wiki-gptel.el
             ];
           };
 
@@ -77,8 +80,10 @@
               ./org-wiki.el
               ./org-wiki-mcp.el
               ./org-wiki-commands.el
+              ./org-wiki-gptel.el
               ./org-wiki-test.el
               ./org-wiki-commands-test.el
+              ./org-wiki-gptel-test.el
               ./Makefile
               ./flake.nix
               ./scripts

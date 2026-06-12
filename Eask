@@ -9,9 +9,9 @@
 
 (package-file "org-wiki.el")
 
-(files "org-wiki.el" "org-wiki-mcp.el" "org-wiki-commands.el")
+(files "org-wiki.el" "org-wiki-mcp.el" "org-wiki-commands.el" "org-wiki-gptel.el")
 
-(script "test" "eask test ert org-wiki-test.el org-wiki-commands-test.el")
+(script "test" "eask test ert org-wiki-test.el org-wiki-commands-test.el org-wiki-gptel-test.el")
 
 (source "gnu")
 (source "melpa")
@@ -26,4 +26,7 @@
  (depends-on "ert")
  (depends-on "package-lint")
  (depends-on "relint")
- (depends-on "undercover"))
+ (depends-on "undercover")
+ ;; Optional integration (org-wiki-gptel.el is a soft dependency on
+ ;; gptel); development-only so the gptel tests run instead of skip.
+ (depends-on "gptel"))

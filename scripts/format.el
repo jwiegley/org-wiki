@@ -26,7 +26,7 @@
 ;; macros (e.g. `org-wiki-mcp--with-error-handling') are in effect when
 ;; indenting.  Fail loudly if they don't load: indenting without the
 ;; specs would report false positives.
-(dolist (file '("org-wiki.el" "org-wiki-mcp.el"))
+(dolist (file '("org-wiki.el" "org-wiki-mcp.el" "org-wiki-gptel.el"))
   (load (expand-file-name file) nil t))
 
 (defun org-wiki-format--file (file fix)
