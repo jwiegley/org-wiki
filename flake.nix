@@ -53,6 +53,11 @@
               undercover
               package-lint
               relint
+              # Optional integrations exercised by the skip-unless-guarded
+              # integration tests; present here so those tests run in the
+              # gates rather than skipping.
+              consult
+              embark
             ];
 
           emacsForDev = emacsPackages.emacsWithPackages (epkgs: runtimeDeps epkgs ++ devDeps epkgs);

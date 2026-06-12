@@ -201,12 +201,10 @@ On a miss, refresh the locations table at most once per
 
 (defun org-wiki--node-buffer (file)
   "Return a buffer visiting FILE, reusing any live buffer.
-Fresh buffers are opened with mode hooks delayed: the read tools run
-inside the user's interactive session, and running the full
-`org-mode-hook' (input methods, appearance modes, on-save hashing)
-for every node a tool touches is slow and side-effectful."
+Fresh buffers are fully initialized by `find-file-noselect' and left
+live, so later visits (and `org-wiki--visit') can reuse them safely."
   (or (find-buffer-visiting file)
-      (delay-mode-hooks (find-file-noselect file))))
+      (find-file-noselect file)))
 
 (defun org-wiki--hash-property-name ()
   "Return the name of the hash property `org-hash' writes, if available.

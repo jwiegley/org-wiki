@@ -273,8 +273,9 @@ whether and how to visit the selected node."
 
 (defun org-wiki--preview-marker (node)
   "Return a marker at NODE's heading for previewing, or nil.
-Reuses or quietly opens the node's file buffer; the buffer is left
-open so repeated previews are cheap.  Degrades to nil — no preview —
+Reuses or opens the node's file buffer; opened buffers are fully
+initialized and left live, so repeated previews and later visits are
+cheap.  Degrades to nil — no preview —
 when NODE has no :file and `org-wiki--locate-id' cannot find its id
 \(backlink plists from outside the corpus may carry only :id)."
   (let* ((id (plist-get node :id))
