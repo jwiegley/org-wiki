@@ -38,7 +38,11 @@
 ;;   - ob-gptel source blocks with ":preset org-wiki".
 ;;
 ;; The preset deliberately sets no :backend/:model, so the buffer's
-;; (or global) default backend is inherited.
+;; (or global) default backend is inherited.  The ask/chat buffer
+;; plumbing does, however, pin a concrete model buffer-locally — see
+;; `org-wiki-gptel--resolve-model' — because a global nil
+;; `gptel-model' otherwise goes out on the wire as-is and the
+;; provider answers with an opaque HTTP 404.
 ;;
 ;; The system prompt ships twice: the canonical default lives in
 ;; `org-wiki-gptel--default-system' below so the package is
@@ -69,10 +73,13 @@
 (declare-function gptel-request "ext:gptel-request")
 (declare-function gptel-make-tool "ext:gptel-request")
 (declare-function gptel-get-tool "ext:gptel-request")
-;; cl-defstruct accessor: check-declare cannot resolve it, so only
+;; cl-defstruct accessors: check-declare cannot resolve them, so only
 ;; verify the defining file exists (FILEONLY = t).
 (declare-function gptel-tool-name "ext:gptel-request" (tool) t)
+(declare-function gptel-backend-models "ext:gptel-request" (backend) t)
 
+(defvar gptel-backend)
+(defvar gptel-model)
 (defvar gptel-directives)
 (defvar gptel-tools)
 (defvar gptel-use-tools)
@@ -80,6 +87,19 @@
 (defvar gptel-include-tool-results)
 (defvar gptel-system-prompt)
 (defvar gptel--system-message)
+
+;;;; --- Configuration --------------------------------------------------
+
+(defcustom org-wiki-gptel-model nil
+  "Model for wiki ask/chat requests; nil inherits the gptel default.
+gptel names models with SYMBOLS (the entries of a backend's model
+list), so customize this as a symbol — e.g. `gpt-4o', not the string
+\"gpt-4o\".  When nil, requests use the buffer's (or global)
+`gptel-model', falling back to the first model advertised by the
+active `gptel-backend'; see `org-wiki-gptel--resolve-model'."
+  :type '(choice (const :tag "Inherit gptel-model" nil)
+                 (symbol :tag "Model"))
+  :group 'org-wiki)
 
 ;;;; --- System prompt ------------------------------------------------
 
@@ -325,15 +345,34 @@ this layer works on both sides of the rename."
         ((boundp 'gptel--system-message) 'gptel--system-message)
         (t 'gptel-system-prompt)))
 
+(defun org-wiki-gptel--resolve-model ()
+  "Return the model symbol for wiki requests in the current buffer.
+Resolution order: `org-wiki-gptel-model' when non-nil, else the
+buffer's (or global) `gptel-model' when non-nil, else the first
+model advertised by the active `gptel-backend'.  A nil model must
+never reach the wire — gptel sends it as-is and the provider answers
+with an opaque HTTP 404 — so when all three sources come up empty
+this signals `user-error' naming the fix instead."
+  (or org-wiki-gptel-model
+      (and (boundp 'gptel-model) gptel-model)
+      (and (boundp 'gptel-backend) gptel-backend
+           (car (gptel-backend-models gptel-backend)))
+      (user-error
+       "org-wiki: No gptel model configured; set `org-wiki-gptel-model' or `gptel-model'")))
+
 (defun org-wiki-gptel--prepare-buffer ()
   "Configure the current buffer for wiki questions via gptel.
 Sets the wiki tools, the tool-use flags and the ask system prompt
-buffer-locally; the backend and model are deliberately left alone,
-so the buffer inherits the global gptel configuration."
+buffer-locally.  The backend is deliberately left alone, so the
+buffer inherits the global gptel configuration; the model, however,
+is resolved via `org-wiki-gptel--resolve-model' and pinned
+buffer-locally, because a fresh buffer otherwise inherits a global
+nil `gptel-model' and the request 404s at the provider."
   (setq-local gptel-tools (org-wiki-gptel--tools))
   (setq-local gptel-use-tools t)
   (setq-local gptel-confirm-tool-calls nil)
   (setq-local gptel-include-tool-results 'auto)
+  (setq-local gptel-model (org-wiki-gptel--resolve-model))
   (set (make-local-variable (org-wiki-gptel--system-var))
        (org-wiki-gptel--system)))
 
@@ -345,27 +384,37 @@ MARKER must have insertion type t so it advances past each inserted
 chunk.  String responses stream in at MARKER; nil (a request error)
 inserts the request status; the end-of-stream signal t and tool
 results only message the echo area; everything else (reasoning
-chunks, aborts) is ignored."
-  (lambda (response info)
-    (cond
-     ((stringp response)
-      (with-current-buffer (marker-buffer marker)
-        (save-excursion
-          (goto-char marker)
-          (insert response))))
-     ((eq response t)
-      (message "org-wiki-ask: done"))
-     ((null response)
-      (with-current-buffer (marker-buffer marker)
-        (save-excursion
-          (goto-char marker)
-          (insert (format "[gptel error: %s]"
-                          (plist-get info :status))))))
-     ((eq (car-safe response) 'tool-result)
-      (message "org-wiki-ask: consulted %s"
-               (mapconcat (lambda (r) (gptel-tool-name (car r)))
-                          (cdr response) ", ")))
-     (t nil))))
+chunks, aborts) is ignored.
+
+Once MARKER's buffer is killed — the user can kill *org-wiki-ask*
+mid-stream — every branch drops its input: inserting at a marker
+with no buffer would error inside gptel's callback machinery.  The
+kill is mentioned in the echo area once."
+  (let ((warned nil))
+    (lambda (response info)
+      (if (not (buffer-live-p (marker-buffer marker)))
+          (unless warned
+            (setq warned t)
+            (message "org-wiki-ask: answer buffer was killed"))
+        (cond
+         ((stringp response)
+          (with-current-buffer (marker-buffer marker)
+            (save-excursion
+              (goto-char marker)
+              (insert response))))
+         ((eq response t)
+          (message "org-wiki-ask: done"))
+         ((null response)
+          (with-current-buffer (marker-buffer marker)
+            (save-excursion
+              (goto-char marker)
+              (insert (format "[gptel error: %s]"
+                              (plist-get info :status))))))
+         ((eq (car-safe response) 'tool-result)
+          (message "org-wiki-ask: consulted %s"
+                   (mapconcat (lambda (r) (gptel-tool-name (car r)))
+                              (cdr response) ", ")))
+         (t nil))))))
 
 ;;;###autoload
 (defun org-wiki-ask (question)
@@ -406,9 +455,11 @@ Requires gptel; see `org-wiki-chat' for a persistent dialog."
   "Open a persistent wiki chat: a gptel buffer with the `org-wiki' preset.
 Creates (or reuses) the *org-wiki-chat* gptel buffer and applies the
 preset buffer-locally on top of whatever global or new-buffer gptel
-configuration is in effect, so the default backend is inherited.
-Send questions with \\[gptel-send].  Requires gptel; see
-`org-wiki-ask' for one-shot questions."
+configuration is in effect, so the default backend is inherited; the
+request model is resolved and pinned buffer-locally — see
+`org-wiki-gptel--resolve-model'.  Send questions with
+\\[gptel-send].  Requires gptel; see `org-wiki-ask' for one-shot
+questions."
   (interactive)
   (unless (require 'gptel nil t)
     (user-error "org-wiki: Install gptel to use this command"))
@@ -416,9 +467,14 @@ Send questions with \\[gptel-send].  Requires gptel; see
   (let ((buf (gptel "*org-wiki-chat*")))
     (with-current-buffer buf
       (if (fboundp 'gptel--apply-preset)
-          (gptel--apply-preset 'org-wiki
-                               (lambda (sym val)
-                                 (set (make-local-variable sym) val)))
+          (progn
+            (gptel--apply-preset 'org-wiki
+                                 (lambda (sym val)
+                                   (set (make-local-variable sym) val)))
+            ;; The preset sets no :model; pin one anyway, or a nil
+            ;; global `gptel-model' rides along and 404s at the
+            ;; provider.
+            (setq-local gptel-model (org-wiki-gptel--resolve-model)))
         ;; `gptel--apply-preset' is internal API; degrade to setting
         ;; the variables directly if a gptel upgrade removes it.
         (org-wiki-gptel--prepare-buffer)))

@@ -23,13 +23,16 @@
 
 ;; Loaded only inside the skip-unless-guarded integration tests.
 (defvar gptel--known-tools)
+(defvar gptel-backend)
 (defvar gptel-directives)
+(defvar gptel-model)
 (defvar gptel-tools)
 (defvar gptel-use-tools)
 (defvar gptel-system-prompt)
 (declare-function gptel-get-tool "ext:gptel-request")
 (declare-function gptel-get-preset "ext:gptel")
-;; cl-defstruct accessors (FILEONLY = t).
+;; cl-defstruct constructor and accessors (FILEONLY = t).
+(declare-function gptel--make-backend "ext:gptel-request" (&rest slots) t)
 (declare-function gptel-tool-name "ext:gptel-request" (tool) t)
 (declare-function gptel-tool-category "ext:gptel-request" (tool) t)
 (declare-function gptel-tool-async "ext:gptel-request" (tool) t)
@@ -306,6 +309,65 @@ not load it."
      (should (equal (alist-get 'title (car results))
                     "Content-Addressed Storage")))))
 
+;;;; --- Model resolution ------------------------------------------------
+
+(ert-deftest org-wiki-gptel-test-resolve-model-defcustom-wins ()
+  "An explicit `org-wiki-gptel-model' beats every inherited source."
+  (let ((org-wiki-gptel-model 'wiki-model)
+        (gptel-model 'global-model))
+    (should (eq (org-wiki-gptel--resolve-model) 'wiki-model))))
+
+(ert-deftest org-wiki-gptel-test-resolve-model-inherits-gptel-model ()
+  "With a nil defcustom, the buffer's (or global) `gptel-model' wins."
+  (let ((org-wiki-gptel-model nil)
+        (gptel-model 'global-model))
+    (should (eq (org-wiki-gptel--resolve-model) 'global-model))))
+
+(ert-deftest org-wiki-gptel-test-resolve-model-backend-fallback ()
+  "With no model anywhere, the backend's first model is chosen."
+  (skip-unless (locate-library "gptel"))
+  (require 'gptel)
+  (let ((org-wiki-gptel-model nil)
+        (gptel-model nil)
+        (gptel-backend (gptel--make-backend
+                        :name "test-backend"
+                        :models '(model-a model-b))))
+    (should (eq (org-wiki-gptel--resolve-model) 'model-a)))
+  ;; A backend advertising no models cannot rescue a nil model.
+  (let ((org-wiki-gptel-model nil)
+        (gptel-model nil)
+        (gptel-backend (gptel--make-backend :name "empty" :models nil)))
+    (should-error (org-wiki-gptel--resolve-model) :type 'user-error)))
+
+(ert-deftest org-wiki-gptel-test-resolve-model-all-nil-user-errors ()
+  "No defcustom, no `gptel-model', no backend: a naming `user-error'.
+A nil model must never reach the wire — gptel sends it as-is and the
+provider answers with an opaque HTTP 404."
+  (let ((org-wiki-gptel-model nil)
+        (gptel-model nil)
+        (gptel-backend nil))
+    (let ((err (should-error (org-wiki-gptel--resolve-model)
+                             :type 'user-error)))
+      (should (string-match-p "[Nn]o gptel model configured"
+                              (cadr err))))))
+
+(ert-deftest org-wiki-gptel-test-prepare-buffer-pins-model ()
+  "`org-wiki-gptel--prepare-buffer' pins the resolved model locally.
+A fresh ask buffer otherwise inherits a global nil `gptel-model',
+which goes out on the wire and 404s at the provider."
+  (skip-unless (locate-library "gptel"))
+  (require 'gptel)
+  (org-wiki-gptel-register)
+  (let ((org-wiki-gptel-model nil)
+        (gptel-model nil)
+        (gptel-backend (gptel--make-backend
+                        :name "test-backend"
+                        :models '(model-a model-b))))
+    (with-temp-buffer
+      (org-wiki-gptel--prepare-buffer)
+      (should (local-variable-p 'gptel-model))
+      (should (eq gptel-model 'model-a)))))
+
 ;;;; --- org-wiki-ask -----------------------------------------------------
 
 (ert-deftest org-wiki-gptel-test-ask-prepares-buffer-and-request ()
@@ -315,7 +377,8 @@ not load it."
   (when (get-buffer "*org-wiki-ask*")
     (kill-buffer "*org-wiki-ask*"))
   (unwind-protect
-      (let (captured)
+      (let ((gptel-model 'global-model)
+            captured)
         (cl-letf (((symbol-function 'gptel-request)
                    (lambda (&optional prompt &rest keys)
                      (setq captured (cons prompt keys))))
@@ -330,6 +393,8 @@ not load it."
                                     (buffer-string)))
             (should (= (length gptel-tools) 4))
             (should gptel-use-tools)
+            (should (local-variable-p 'gptel-model))
+            (should (eq gptel-model 'global-model))
             (should (local-variable-p (org-wiki-gptel--system-var))))
           (pcase-let ((`(,prompt . ,keys) captured))
             (should (equal prompt "What is content addressing?"))
@@ -363,6 +428,28 @@ not load it."
         (should (string-match-p "gptel error: 401 unauthorized"
                                 (buffer-string)))))))
 
+(ert-deftest org-wiki-gptel-test-ask-callback-dead-buffer ()
+  "Once the answer buffer is killed, the callback drops everything.
+Inserting at a marker whose buffer is dead errors inside gptel's
+callback machinery; the guard swallows every branch and mentions
+the kill in the echo area exactly once."
+  (let* ((buf (generate-new-buffer " *org-wiki-ask-dead*"))
+         (marker (with-current-buffer buf (point-marker)))
+         (messages nil))
+    (set-marker-insertion-type marker t)
+    (let ((cb (org-wiki-gptel--ask-callback marker)))
+      (kill-buffer buf)
+      (cl-letf (((symbol-function 'message)
+                 (lambda (fmt &rest args)
+                   (when fmt (push (apply #'format fmt args) messages))
+                   nil)))
+        (funcall cb "a streamed chunk" nil)       ; would insert
+        (funcall cb t nil)                        ; end-of-stream
+        (funcall cb nil '(:status "500 oops"))    ; would insert
+        (funcall cb 'abort nil))
+      (should (equal messages
+                     '("org-wiki-ask: answer buffer was killed"))))))
+
 (ert-deftest org-wiki-gptel-test-ask-callback-tool-result ()
   "Tool results only message the echo area; nothing is inserted."
   (skip-unless (locate-library "gptel"))
@@ -391,8 +478,12 @@ not load it."
                      (lambda (_name &rest _) chat-buf))
                     ((symbol-function 'pop-to-buffer)
                      (lambda (buf &rest _) buf)))
-            (org-wiki-chat))
+            (let ((gptel-model 'global-model))
+              (org-wiki-chat)))
           (with-current-buffer chat-buf
+            ;; The preset sets no :model; the command pins one anyway.
+            (should (local-variable-p 'gptel-model))
+            (should (eq gptel-model 'global-model))
             (should (= (length gptel-tools) 4))
             (should (cl-every (lambda (tool)
                                 (member (gptel-tool-name tool)
