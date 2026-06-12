@@ -74,7 +74,7 @@
 (declare-function org-roam-node-title "org-roam-node" (node) t)
 (declare-function org-roam-node-file "org-roam-node" (node) t)
 (declare-function org-ql-semantic-files "ext:org-ql-semantic")
-(declare-function org-ql-semantic--sort-by-score "ext:org-ql-semantic")
+(declare-function org-ql-semantic--match-score "ext:org-ql-semantic")
 (declare-function org-hash-property "ext:org-hash")
 (declare-function org-roam-db-query "org-roam-db")
 (defvar org-roam-db-location)
@@ -241,46 +241,101 @@ Empty string if no such subheading exists."
 
 ;;;; --- Discovery tools --------------------------------------------
 
+(defvar org-wiki--semantic-require-failed nil
+  "Non-nil after a soft `require' of org-ql-semantic has failed.
+Caps the failed library probe at once per session: search sits on
+hot paths (every MCP call, the benchmark and fuzz harnesses), and a
+missing library would otherwise re-scan `load-path' on every query.")
+
+(defun org-wiki--semantic-available-p ()
+  "Return non-nil when the org-ql-semantic backend can be used.
+Loads the library on first use when it is present on `load-path' but
+not yet loaded — a deferred `use-package' configuration still applies
+through `eval-after-load'.  When the library is absent the failed
+probe is remembered and not repeated, though a later in-session load
+is still picked up via `fboundp'."
+  (cond ((fboundp 'org-ql-semantic-files) t)
+        (org-wiki--semantic-require-failed nil)
+        ((require 'org-ql-semantic nil t) t)
+        (t (setq org-wiki--semantic-require-failed t)
+           nil)))
+
 (defun org-wiki--search (query &optional k)
   "Search wiki nodes for QUERY, returning up to K (default 10) plists.
 Each result has keys :id :title :kind :file :summary.
 
-When `org-ql-semantic-files' is available the search is
-semantic-first and results are ordered by similarity.  If the
-semantic backend errors — org-ql-semantic signals rather than
-degrading when its CLI or embedding server is down — or is absent,
-the search falls back to a literal string match against `org-ql''s
+When the org-ql-semantic library is available — already loaded, or
+loadable from `load-path' — the search is semantic-first and results
+are ordered by similarity.  If the semantic backend errors —
+org-ql-semantic signals rather than degrading when its CLI or
+embedding server is down — or is absent, or returns no matches, the
+search falls back to a literal string match against `org-ql''s
 `heading' / `regexp' predicates, in corpus-traversal order with no
 relevance ranking."
   (require 'org-ql)
   (let* ((k (or k org-wiki-default-search-limit))
          (files (org-wiki--candidate-files))
          (semantic
-          (when (fboundp 'org-ql-semantic-files)
-            (condition-case nil
-                (cons t (org-wiki--semantic-search query files))
-              ;; Degraded mode: backend down or misconfigured.
-              (error nil)))))
-    (seq-take (if semantic
-                  (cdr semantic)
-                (org-wiki--text-search query files))
-              k)))
+          (condition-case nil
+              (when (org-wiki--semantic-available-p)
+                (org-wiki--semantic-search query files))
+            ;; Degraded mode: backend down or misconfigured.
+            (error nil))))
+    ;; An empty semantic result (no error signaled) also falls through
+    ;; to the literal fallback: a paraphrase the embedding misses must
+    ;; never beat a query that literal matching would have answered.
+    (seq-take (or semantic (org-wiki--text-search query files)) k)))
 
 (defun org-wiki--semantic-search (query files)
-  "Return wiki-node summaries for QUERY from FILES, best match first."
+  "Return wiki-node summaries for QUERY from FILES, best match first.
+A hit anywhere in a node's subtree surfaces the enclosing node — the
+nearest self-or-ancestor heading bearing `:WIKI_KIND:' — and each
+node is ranked by its best-matching heading's score.  The strongest
+matches are routinely on Summary/Definition subheadings, which carry
+no `:WIKI_KIND:' of their own."
   (let ((wiki-set (make-hash-table :test #'equal)))
+    ;; Key the candidate set by truename: FILES are discovered through
+    ;; `org-wiki-root', which may reach the corpus through symlinks,
+    ;; while the backend returns fully resolved paths.  Without
+    ;; normalizing both sides the intersection comes back empty.
     (dolist (file files)
-      (puthash file t wiki-set))
+      (puthash (file-truename file) t wiki-set))
     ;; Filter the similarity-ordered list against the wiki set rather
     ;; than intersecting the other way around: `cl-intersection' does
     ;; not preserve order, and the ranking is the point.
-    (let ((candidates (seq-filter (lambda (file) (gethash file wiki-set))
+    (let ((candidates (seq-filter (lambda (file)
+                                    (gethash (file-truename file) wiki-set))
                                   (org-ql-semantic-files query))))
       (when candidates
-        (org-ql-select candidates
-                       `(and (property "WIKI_KIND") (semantic ,query))
-                       :action #'org-wiki--node-at-point-summary
-                       :sort #'org-ql-semantic--sort-by-score)))))
+        (let ((scored
+               (delq nil
+                     (org-ql-select candidates `(semantic ,query)
+                                    :action
+                                    (lambda ()
+                                      (let ((score (or (org-ql-semantic--match-score query)
+                                                       0.0)))
+                                        (save-excursion
+                                          (let ((kind (org-entry-get nil "WIKI_KIND")))
+                                            (while (and (not kind) (org-up-heading-safe))
+                                              (setq kind (org-entry-get nil "WIKI_KIND")))
+                                            (when kind
+                                              (cons score
+                                                    (org-wiki--node-at-point-summary)))))))))))
+          ;; Rank the plists ourselves: `org-ql-select' applies :sort
+          ;; to the ACTION results, and org-ql-semantic's comparator
+          ;; expects org elements, so handing it summary plists dies
+          ;; with wrong-type-argument.  Dedupe by node id keeping the
+          ;; best score per node, then sort descending.
+          (let ((best (make-hash-table :test #'equal)))
+            (dolist (sr scored)
+              (let* ((id (plist-get (cdr sr) :id))
+                     (prev (gethash id best)))
+                (when (or (null prev) (> (car sr) (car prev)))
+                  (puthash id sr best))))
+            (let (out)
+              (maphash (lambda (_id sr) (push sr out)) best)
+              (mapcar #'cdr
+                      (sort out (lambda (a b) (> (car a) (car b))))))))))))
 
 (defun org-wiki--text-search (query files)
   "Return wiki-node summaries matching QUERY literally in FILES."

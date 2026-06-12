@@ -66,13 +66,17 @@ would let one test see another's stale state."
          (org-wiki-test--fixture-dir root))
     (unwind-protect
         (funcall body)
-      (dolist (buf (buffer-list))
-        (let ((file (buffer-file-name buf)))
-          (when (and file
-                     (string-prefix-p (file-name-as-directory root) file))
-            (with-current-buffer buf
-              (set-buffer-modified-p nil))
-            (kill-buffer buf))))
+      ;; Compare truenames: tests may reach fixture files through
+      ;; symlinks (or macOS's /var -> /private/var indirection), and a
+      ;; buffer visiting a resolved path must still be cleaned up.
+      (let ((root-true (file-name-as-directory (file-truename root))))
+        (dolist (buf (buffer-list))
+          (let ((file (buffer-file-name buf)))
+            (when (and file
+                       (string-prefix-p root-true (file-truename file)))
+              (with-current-buffer buf
+                (set-buffer-modified-p nil))
+              (kill-buffer buf)))))
       (delete-directory root t))))
 
 (defmacro org-wiki-test-with-fixtures (&rest body)
@@ -238,6 +242,140 @@ The write-allowlist (§3.5) is path-bounded even when identity is not."
     org-wiki-test--entity-node)
    (let ((results (org-wiki--search "" 1)))
      (should (<= (length results) 1)))))
+
+;;;; --- Semantic search ---------------------------------------------
+
+;; org-ql-semantic is not installable in the gate environment, so the
+;; semantic path is exercised against stubs: `org-ql-semantic-files'
+;; and `org-ql-semantic--match-score' are bound per-test with
+;; `cl-letf' (making the `fboundp' availability probe pass), and the
+;; `semantic' org-ql predicate is provided by the helper below.
+
+(declare-function org-ql-semantic--match-score "ext:org-ql-semantic")
+
+(defun org-wiki-test--ensure-semantic-predicate ()
+  "Define a stub `semantic' org-ql predicate if the real one is absent.
+Like the real predicate, its body defers to
+`org-ql-semantic--match-score', so a single `cl-letf' binding drives
+both the match and the score the action records.  The `eval'
+indirection keeps org-ql a runtime-only dependency of this file:
+loading org-ql at compile time would route this file's
+`org-ql-select' calls through org-ql's compiler macros, which warn
+fatally under the build gate."
+  (require 'org-ql)
+  (unless (fboundp 'org-ql--predicate-semantic)
+    (eval '(org-ql-defpred semantic (query)
+                           "Test stub for the org-ql-semantic predicate."
+                           :body (org-ql-semantic--match-score query))
+          t)))
+
+(ert-deftest org-wiki-test-semantic-search-survives-symlinked-root ()
+  "Semantic results survive a symlinked `org-wiki-root'.
+Candidate files are discovered through `org-wiki-root', which may
+reach the corpus through symlinks, while the semantic backend returns
+fully resolved paths.  The intersection must be truename-keyed on
+both sides or it comes back empty for every query."
+  (org-wiki-test-with-fixtures
+   (let ((real-file (org-wiki-test--write-fixture
+                     "concepts/202605131012-content-addressed-storage.org"
+                     org-wiki-test--concept-node))
+         (link (concat (directory-file-name org-wiki-test--fixture-dir)
+                       "-link")))
+     (make-symbolic-link (directory-file-name org-wiki-test--fixture-dir)
+                         link)
+     (unwind-protect
+         (let ((org-wiki-root (file-name-as-directory link)))
+           (org-wiki-test--ensure-semantic-predicate)
+           (cl-letf (((symbol-function 'org-ql-semantic-files)
+                      (lambda (_query &optional _limit)
+                        (list (file-truename real-file))))
+                     ((symbol-function 'org-ql-semantic--match-score)
+                      (lambda (_query) 0.9)))
+             (let ((results (org-wiki--search "content addressing" 5)))
+               (should results)
+               (should (string= (plist-get (car results) :id)
+                                "4f1c3b8e-9ad2-4b7e-9d04-1a5e6f7c8b91")))))
+       (delete-file link)))))
+
+(ert-deftest org-wiki-test-semantic-search-child-hit-surfaces-node ()
+  "A semantic hit on a child heading surfaces the enclosing wiki node.
+The strongest matches are routinely on Summary/Definition
+subheadings, which carry no :WIKI_KIND: of their own; the search must
+climb to the nearest ancestor that does."
+  (org-wiki-test-with-fixtures
+   (let ((file (org-wiki-test--write-fixture
+                "concepts/202605131012-content-addressed-storage.org"
+                org-wiki-test--concept-node)))
+     (org-wiki-test--ensure-semantic-predicate)
+     (cl-letf (((symbol-function 'org-ql-semantic-files)
+                (lambda (_query &optional _limit) (list file)))
+               ((symbol-function 'org-ql-semantic--match-score)
+                ;; Only the Summary subheading matches.
+                (lambda (_query)
+                  (when (equal (org-get-heading t t t t) "Summary")
+                    0.8))))
+       (let ((results (org-wiki--search "hash of bytes, not a path" 5)))
+         (should (= 1 (length results)))
+         (should (string= (plist-get (car results) :id)
+                          "4f1c3b8e-9ad2-4b7e-9d04-1a5e6f7c8b91"))
+         (should (string= (plist-get (car results) :kind) "Concept")))))))
+
+(ert-deftest org-wiki-test-semantic-search-ranks-by-score ()
+  "Semantic results are ordered by score, not corpus-traversal order."
+  (org-wiki-test-with-fixtures
+   (let ((concept (org-wiki-test--write-fixture
+                   "concepts/202605131012-content-addressed-storage.org"
+                   org-wiki-test--concept-node))
+         (entity (org-wiki-test--write-fixture
+                  "entities/202605131013-andrej-karpathy.org"
+                  org-wiki-test--entity-node)))
+     (org-wiki-test--ensure-semantic-predicate)
+     (cl-letf (((symbol-function 'org-ql-semantic-files)
+                ;; Traversal order deliberately puts the weaker match
+                ;; first; the ranking must reorder.
+                (lambda (_query &optional _limit) (list concept entity)))
+               ((symbol-function 'org-ql-semantic--match-score)
+                (lambda (_query)
+                  (if (equal (buffer-file-name) entity) 0.9 0.4))))
+       (let ((results (org-wiki--search "famous computer scientists" 5)))
+         (should (equal (mapcar (lambda (r) (plist-get r :id)) results)
+                        '("a23b4c5d-6e7f-8901-2345-67890abcdef0"
+                          "4f1c3b8e-9ad2-4b7e-9d04-1a5e6f7c8b91"))))))))
+
+(ert-deftest org-wiki-test-semantic-search-empty-falls-back-to-text ()
+  "An empty (non-error) semantic result falls back to literal search.
+A paraphrase the embedding misses must never beat a query literal
+matching would have answered — zero semantic hits means degrade, not
+return nothing."
+  (org-wiki-test-with-fixtures
+   (org-wiki-test--write-fixture
+    "concepts/202605131012-content-addressed-storage.org"
+    org-wiki-test--concept-node)
+   (cl-letf (((symbol-function 'org-ql-semantic-files)
+              (lambda (_query &optional _limit) nil)))
+     (let ((results (org-wiki--search "Content" 5)))
+       (should (cl-some (lambda (r)
+                          (string= (plist-get r :id)
+                                   "4f1c3b8e-9ad2-4b7e-9d04-1a5e6f7c8b91"))
+                        results))))))
+
+(ert-deftest org-wiki-test-semantic-search-error-falls-back-to-text ()
+  "A signaling semantic backend degrades to the literal text search.
+org-ql-semantic signals rather than degrading when its CLI or
+embedding server is down; the search must swallow that and still
+return literal matches."
+  (org-wiki-test-with-fixtures
+   (org-wiki-test--write-fixture
+    "concepts/202605131012-content-addressed-storage.org"
+    org-wiki-test--concept-node)
+   (cl-letf (((symbol-function 'org-ql-semantic-files)
+              (lambda (_query &optional _limit)
+                (error "Semantic backend is down"))))
+     (let ((results (org-wiki--search "Content" 5)))
+       (should (cl-some (lambda (r)
+                          (string= (plist-get r :id)
+                                   "4f1c3b8e-9ad2-4b7e-9d04-1a5e6f7c8b91"))
+                        results))))))
 
 ;;;; --- Reading ----------------------------------------------------
 
