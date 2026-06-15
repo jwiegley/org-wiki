@@ -23,14 +23,19 @@
 
 ;; Loaded only inside the skip-unless-guarded integration tests.
 (defvar gptel--known-tools)
+(defvar gptel--known-presets)
+(defvar gptel--preset)
 (defvar gptel-backend)
 (defvar gptel-directives)
 (defvar gptel-model)
 (defvar gptel-tools)
 (defvar gptel-use-tools)
+(defvar gptel-confirm-tool-calls)
 (defvar gptel-system-prompt)
+(declare-function gptel--apply-preset "ext:gptel" (preset &optional setter))
 (declare-function gptel-get-tool "ext:gptel-request")
 (declare-function gptel-get-preset "ext:gptel")
+(declare-function gptel-make-tool "ext:gptel-request")
 ;; cl-defstruct constructor and accessors (FILEONLY = t).
 (declare-function gptel--make-backend "ext:gptel-request" (&rest slots) t)
 (declare-function gptel-tool-name "ext:gptel-request" (tool) t)
@@ -119,6 +124,8 @@ not load it."
   (should (= (org-wiki-gptel--clamp-k 1000) 100))
   (should (= (org-wiki-gptel--clamp-k 2.0) 2))
   (should (= (org-wiki-gptel--clamp-k 2.7) 2))
+  (should (= (org-wiki-gptel--clamp-k 0.9)
+             org-wiki-default-search-limit))
   (should (= (org-wiki-gptel--clamp-k nil) org-wiki-default-search-limit))
   (should (= (org-wiki-gptel--clamp-k 0) org-wiki-default-search-limit))
   (should (= (org-wiki-gptel--clamp-k -1) org-wiki-default-search-limit))
@@ -133,11 +140,13 @@ not load it."
       (org-wiki-gptel--search "q" 0)
       (org-wiki-gptel--search "q" 7)
       (org-wiki-gptel--search "q" 1000)
-      (org-wiki-gptel--search "q" 2.0))
+      (org-wiki-gptel--search "q" 2.0)
+      (org-wiki-gptel--search "q" 0.9))
     (should (equal (nreverse seen)
                    (list org-wiki-default-search-limit
                          org-wiki-default-search-limit
-                         7 100 2)))))
+                         7 100 2
+                         org-wiki-default-search-limit)))))
 
 (ert-deftest org-wiki-gptel-test-search-tool-returns-json-array ()
   "The search tool returns a JSON array of node summary objects."
@@ -284,7 +293,11 @@ not load it."
   (org-wiki-gptel-register)
   (let ((spec (gptel-get-preset 'org-wiki)))
     (should spec)
-    (should (equal (plist-get spec :tools) org-wiki-gptel--tool-names))
+    (should (equal (mapcar #'gptel-tool-name (plist-get spec :tools))
+                   org-wiki-gptel--tool-names))
+    (should (cl-every (lambda (tool)
+                        (equal (gptel-tool-category tool) "org-wiki"))
+                      (plist-get spec :tools)))
     (should (eq (plist-get spec :system) #'org-wiki-gptel--system))
     (should (plist-get spec :use-tools))
     (should (plist-member spec :confirm-tool-calls))
@@ -292,6 +305,44 @@ not load it."
     ;; No backend/model: the preset must inherit whatever is in effect.
     (should-not (plist-member spec :backend))
     (should-not (plist-member spec :model))))
+
+(ert-deftest org-wiki-gptel-test-preset-ignores-duplicate-tool-names ()
+  "Applying the preset keeps org-wiki tools when names are duplicated."
+  (skip-unless (locate-library "gptel"))
+  (require 'gptel)
+  (let ((known-tools (copy-tree gptel--known-tools))
+        (known-presets (copy-tree gptel--known-presets)))
+    (unwind-protect
+        (progn
+          (org-wiki-gptel-register)
+          (dolist (name org-wiki-gptel--tool-names)
+            (gptel-make-tool
+             :name name
+             :function #'ignore
+             :description "Same-named non-org-wiki test tool."
+             :args nil
+             :category "mcp" :confirm nil :include nil))
+          (setq gptel--known-tools
+                (append (cl-remove-if-not
+                         (lambda (cat) (equal (car cat) "mcp"))
+                         gptel--known-tools)
+                        (cl-remove-if
+                         (lambda (cat) (equal (car cat) "mcp"))
+                         gptel--known-tools)))
+          (let ((gptel--preset nil)
+                (gptel-tools nil)
+                (gptel-use-tools nil)
+                (gptel-confirm-tool-calls t)
+                (gptel-system-prompt nil))
+            (gptel--apply-preset 'org-wiki)
+            (should (equal (mapcar #'gptel-tool-name gptel-tools)
+                           org-wiki-gptel--tool-names))
+            (should (cl-every
+                     (lambda (tool)
+                       (equal (gptel-tool-category tool) "org-wiki"))
+                     gptel-tools))))
+      (setq gptel--known-tools known-tools)
+      (setq gptel--known-presets known-presets))))
 
 (ert-deftest org-wiki-gptel-test-registered-functions-callable ()
   "The registered tool functions run positionally as gptel calls them."

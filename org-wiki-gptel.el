@@ -213,10 +213,12 @@ request aborting."
 (defun org-wiki-gptel--clamp-k (k)
   "Return a sane result limit from tool argument K.
 JSON numbers can arrive as floats, and negative or junk values must
-not reach `seq-take', so anything outside 1..100 falls back to
-`org-wiki-default-search-limit'."
+not reach `seq-take'.  Values above 100 are capped; values that
+truncate below 1 fall back to `org-wiki-default-search-limit'."
   (cond ((and (integerp k) (> k 0)) (min k 100))
-        ((and (numberp k) (> k 0)) (min (truncate k) 100))
+        ((and (numberp k) (> k 0))
+         (let ((n (truncate k)))
+           (if (> n 0) (min n 100) org-wiki-default-search-limit)))
         (t org-wiki-default-search-limit)))
 
 (defun org-wiki-gptel--search (query &optional k)
@@ -331,7 +333,7 @@ returns the nodes that link to it."))
                      :description
                      "Answer from John's org wiki: wiki tools + ask discipline"
                      :system #'org-wiki-gptel--system
-                     :tools org-wiki-gptel--tool-names
+                     :tools (org-wiki-gptel--tools)
                      :use-tools t
                      :confirm-tool-calls nil)
   (message "org-wiki: registered %d gptel tools and the org-wiki preset"
