@@ -496,5 +496,24 @@ the kill in the echo area exactly once."
             (should (local-variable-p (org-wiki-gptel--system-var)))))
       (kill-buffer chat-buf))))
 
+(ert-deftest org-wiki-gptel-test-chat-missing-model-creates-no-buffer ()
+  "`org-wiki-chat' signals before creating a buffer when no model resolves.
+Regression for the half-configured-buffer note: the model is resolved
+before `gptel' spins up *org-wiki-chat*, so a missing-model
+`user-error' leaves nothing behind for the next call to reuse."
+  (skip-unless (locate-library "gptel"))
+  (require 'gptel)
+  (let ((gptel-called nil))
+    (cl-letf (((symbol-function 'gptel)
+               (lambda (&rest _)
+                 (setq gptel-called t)
+                 (generate-new-buffer " *org-wiki-chat-should-not-exist*")))
+              ((symbol-function 'pop-to-buffer) (lambda (buf &rest _) buf)))
+      (let ((org-wiki-gptel-model nil)
+            (gptel-model nil)
+            (gptel-backend nil))
+        (should-error (org-wiki-chat) :type 'user-error)
+        (should-not gptel-called)))))
+
 (provide 'org-wiki-gptel-test)
 ;;; org-wiki-gptel-test.el ends here

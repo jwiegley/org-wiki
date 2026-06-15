@@ -383,8 +383,10 @@ nil `gptel-model' and the request 404s at the provider."
 MARKER must have insertion type t so it advances past each inserted
 chunk.  String responses stream in at MARKER; nil (a request error)
 inserts the request status; the end-of-stream signal t and tool
-results only message the echo area; everything else (reasoning
-chunks, aborts) is ignored.
+results (`tool-result') only message the echo area; the final clause
+intentionally drops everything else: `tool-call' requests (the wiki
+tools run unconfirmed, so the call is never surfaced), reasoning
+chunks, and aborts.
 
 Once MARKER's buffer is killed — the user can kill *org-wiki-ask*
 mid-stream — every branch drops its input: inserting at a marker
@@ -464,17 +466,24 @@ questions."
   (unless (require 'gptel nil t)
     (user-error "org-wiki: Install gptel to use this command"))
   (org-wiki-gptel-register)
-  (let ((buf (gptel "*org-wiki-chat*")))
+  ;; Resolve the model BEFORE creating or configuring the buffer: a
+  ;; missing-model `user-error' must fire before `gptel' has spun up
+  ;; *org-wiki-chat*, or it leaves a half-configured chat buffer that
+  ;; the next call silently reuses.  The resolution reads the same
+  ;; sources (`org-wiki-gptel-model', the global `gptel-model', the
+  ;; backend) whether run here or inside the buffer.
+  (let* ((model (org-wiki-gptel--resolve-model))
+         (buf (gptel "*org-wiki-chat*")))
     (with-current-buffer buf
       (if (fboundp 'gptel--apply-preset)
           (progn
             (gptel--apply-preset 'org-wiki
                                  (lambda (sym val)
                                    (set (make-local-variable sym) val)))
-            ;; The preset sets no :model; pin one anyway, or a nil
-            ;; global `gptel-model' rides along and 404s at the
-            ;; provider.
-            (setq-local gptel-model (org-wiki-gptel--resolve-model)))
+            ;; The preset sets no :model; pin the resolved one anyway,
+            ;; or a nil global `gptel-model' rides along and 404s at
+            ;; the provider.
+            (setq-local gptel-model model))
         ;; `gptel--apply-preset' is internal API; degrade to setting
         ;; the variables directly if a gptel upgrade removes it.
         (org-wiki-gptel--prepare-buffer)))

@@ -420,15 +420,20 @@ load-attempt counter zeroed, the failed-require memo cleared — and
 restores all of it afterward.  Callers must `skip-unless' the real
 library is not loaded."
   (let ((libdir (make-temp-file "org-wiki-fake-semantic-" t)))
-    (with-temp-file (expand-file-name "org-ql-semantic.el" libdir)
-      (insert content))
-    (fmakunbound 'org-ql-semantic-files)
-    (fmakunbound 'org-ql-semantic--match-score)
-    (setq org-wiki-test--semantic-load-attempts 0)
-    (setq org-wiki--semantic-require-failed nil)
-    (push libdir load-path)
+    ;; Everything after the temp directory exists runs inside the
+    ;; `unwind-protect', so a throw while writing the fake library or
+    ;; pushing it onto `load-path' still triggers cleanup and never
+    ;; leaks the directory.
     (unwind-protect
-        (funcall body)
+        (progn
+          (with-temp-file (expand-file-name "org-ql-semantic.el" libdir)
+            (insert content))
+          (fmakunbound 'org-ql-semantic-files)
+          (fmakunbound 'org-ql-semantic--match-score)
+          (setq org-wiki-test--semantic-load-attempts 0)
+          (setq org-wiki--semantic-require-failed nil)
+          (push libdir load-path)
+          (funcall body))
       (setq load-path (delete libdir load-path))
       (setq features (delq 'org-ql-semantic features))
       (fmakunbound 'org-ql-semantic-files)
