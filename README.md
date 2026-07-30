@@ -67,6 +67,7 @@ What is implemented here:
 - node body reads by ID
 - metadata reads with tool-maintained hash properties stripped
 - backlink reads through org-roam
+- deterministic structural health diagnostics
 - MCP tool registration
 - interactive Emacs commands
 - gptel tools, preset, one-shot ask command, and persistent chat command
@@ -119,11 +120,12 @@ the canonical heading ID so callers learn what to cite next time.
 
 ## Implementation
 
-The package is split into four modules.
+The package is split into five modules.
 
 | File | Role |
 | --- | --- |
 | `org-wiki.el` | Data core: node predicates, candidate discovery, search, reads, metadata, backlinks, ID normalization, and structured errors. |
+| `org-wiki-health.el` | Deterministic, read-only structural health diagnostics. |
 | `org-wiki-mcp.el` | Read-only MCP tool registration around the data core. |
 | `org-wiki-commands.el` | Interactive Emacs commands with optional consult previews and embark actions. |
 | `org-wiki-gptel.el` | Direct gptel tools, the `org-wiki` preset, `org-wiki-ask`, and `org-wiki-chat`. |
@@ -156,9 +158,17 @@ Errors use the `org-wiki-error` condition with stable payloads such as
 `:unknown_id`, `:id_not_in_file`, and `:not_a_wiki_node`. The MCP and
 gptel layers convert these into JSON-shaped tool results.
 
+### Health
+
+`org-wiki--health` performs deterministic, read-only checks over every wiki
+node: missing or duplicate IDs, invalid kinds, missing summaries, broken or
+non-canonical wiki ID links, source provenance, `SOURCE_IDS` citation parity,
+and type-aware orphan/source connectivity. It makes no LLM calls. Results
+include stable issue codes and are exposed through Emacs, MCP, and gptel.
+
 ### MCP Tools
 
-`org-wiki-mcp-enable` registers four read-only tools:
+`org-wiki-mcp-enable` registers five read-only tools:
 
 | Tool | Arguments | Result |
 | --- | --- | --- |
@@ -166,6 +176,7 @@ gptel layers convert these into JSON-shaped tool results.
 | `wiki_read_node` | `id` | Full Org body plus canonical ID. |
 | `wiki_node_metadata` | `id` | Property drawer as JSON, hash properties omitted. |
 | `wiki_backlinks` | `id` | Nodes that link to the target node. |
+| `wiki_health` | none | Deterministic structural health report. |
 
 The default MCP `server-id` is `"default"` and can be customized with
 `org-wiki-mcp-server-id`. Tool names are prefixed with `wiki_` to avoid
@@ -188,6 +199,7 @@ operations:
 | `org-wiki-find` | Pick a wiki node by title and visit it. |
 | `org-wiki-backlinks` | Show nodes linking to the node at point or a chosen node. |
 | `org-wiki-show-metadata` | Display node metadata in a transient buffer. |
+| `org-wiki-health` | Display deterministic structural health diagnostics. |
 
 The commands work with plain `completing-read`. If `consult` is loaded,
 candidates get live previews. If `embark` is loaded, wiki candidates and
@@ -200,12 +212,12 @@ The package provides an unbound prefix keymap:
 (keymap-set global-map "C-c w" 'org-wiki-command-map)
 ```
 
-This gives `C-c w s`, `C-c w f`, `C-c w b`, and `C-c w m` for search,
-find, backlinks, and metadata.
+This gives `C-c w s`, `C-c w f`, `C-c w b`, `C-c w m`, and `C-c w h` for
+search, find, backlinks, metadata, and health.
 
 ### gptel Integration
 
-`org-wiki-gptel.el` exposes the same four operations as direct gptel
+`org-wiki-gptel.el` exposes the same five operations as direct gptel
 tools. This avoids an MCP hop when the LLM conversation is already
 inside Emacs.
 
@@ -246,7 +258,8 @@ directly from this directory:
   :commands (org-wiki-search
              org-wiki-find
              org-wiki-backlinks
-             org-wiki-show-metadata)
+             org-wiki-show-metadata
+             org-wiki-health)
   :config
   (keymap-set global-map "C-c w" 'org-wiki-command-map))
 ```
@@ -301,7 +314,7 @@ surface:
 
 - source ingest and raw artifact management
 - creation, patching, merging, or deletion of wiki nodes
-- validator and lint-repair tools
+- semantic lint and lint-repair tools
 - write-ahead logging, crash recovery, file locks, and transaction
   replay
 - hash refresh and tamper-evidence on mutation
