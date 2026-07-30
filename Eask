@@ -9,7 +9,8 @@
 
 (package-file "org-wiki.el")
 
-(files "org-wiki.el" "org-wiki-mcp.el" "org-wiki-commands.el" "org-wiki-gptel.el")
+(files "org-wiki.el" "org-wiki-health.el" "org-wiki-mcp.el"
+       "org-wiki-commands.el" "org-wiki-gptel.el")
 
 (script "test" "eask test ert org-wiki-test.el org-wiki-commands-test.el org-wiki-gptel-test.el")
 

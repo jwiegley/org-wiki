@@ -68,6 +68,7 @@
             root = ./.;
             fileset = lib.fileset.unions [
               ./org-wiki.el
+              ./org-wiki-health.el
               ./org-wiki-mcp.el
               ./org-wiki-commands.el
               ./org-wiki-gptel.el
@@ -78,6 +79,7 @@
             root = ./.;
             fileset = lib.fileset.unions [
               ./org-wiki.el
+              ./org-wiki-health.el
               ./org-wiki-mcp.el
               ./org-wiki-commands.el
               ./org-wiki-gptel.el

@@ -140,6 +140,76 @@ pattern in late 2025.
 This file lives in the wiki tree but lacks :WIKI_KIND:, so it must
 not be classified as a wiki node.
 ")
+(defconst org-wiki-test--health-source-node "\
+:PROPERTIES:
+:ID:       11111111-1111-4111-8111-111111111111
+:CREATED:  [2026-07-30 Thu 10:00]
+:END:
+#+category: Wiki/Test
+#+filetags: :wiki:source_record:
+#+title: Healthy Source
+
+* Healthy Source
+:PROPERTIES:
+:ID:        src-11111111-1111-4111-8111-111111111111
+:WIKI_KIND: Source-Record
+:CONFIDENCE: high
+:CREATED:   [2026-07-30 Thu 10:00]
+:ROAM_REFS: https://example.invalid/source
+:RETRIEVED: [2026-07-30 Thu]
+:END:
+
+** Summary
+
+A source used by the healthy fixture.
+
+** Nodes derived from this source
+
+- [[id:22222222-2222-4222-8222-222222222222][Healthy Concept]]
+
+** Change Log
+
+- [2026-07-30 Thu] created.
+")
+
+(defconst org-wiki-test--health-concept-node "\
+:PROPERTIES:
+:ID:       22222222-2222-4222-8222-222222222223
+:CREATED:  [2026-07-30 Thu 10:01]
+:END:
+#+category: Wiki/Test
+#+filetags: :wiki:concept:
+#+title: Healthy Concept
+
+* Healthy Concept
+:PROPERTIES:
+:ID:         22222222-2222-4222-8222-222222222222
+:WIKI_KIND:  Concept
+:CONFIDENCE: high
+:CREATED:    [2026-07-30 Thu 10:01]
+:SOURCE_IDS: src-11111111-1111-4111-8111-111111111111
+:END:
+
+** Summary
+
+A concept backed by the healthy source.
+
+** Related
+
+- [[id:src-11111111-1111-4111-8111-111111111111][Healthy Source]]
+
+** Sources
+
+| ID | Kind | Title | Anchor |
+
+** Disputed Claims
+
+None.
+
+** Change Log
+
+- [2026-07-30 Thu] created.
+")
 
 ;;;; --- Identity predicate -----------------------------------------
 
@@ -782,6 +852,73 @@ Covers the `:id_not_in_file' branch of `org-wiki--goto-id' (a stale
       (org-wiki-read-node "dddddddd-1111-2222-3333-444444444444")
       :type 'org-wiki-error))))
 
+;;;; --- Deterministic health --------------------------------------
+
+(ert-deftest org-wiki-test-health-clean-fixture ()
+  "A linked concept and source produce a clean deterministic report."
+  (org-wiki-test-with-fixtures
+   (org-wiki-test--write-fixture "sources/202607301000-source.org"
+                                 org-wiki-test--health-source-node)
+   (org-wiki-test--write-fixture "concepts/202607301001-concept.org"
+                                 org-wiki-test--health-concept-node)
+   (let ((report (org-wiki--health)))
+     (should (equal (plist-get report :status) "ok"))
+     (should (= (plist-get report :node-count) 2))
+     (should (= (plist-get report :issue-count) 0))
+     (should (equal (plist-get report :issues) [])))))
+
+(ert-deftest org-wiki-test-health-detects-structural-issues ()
+  "Health reports malformed provenance, links, summaries and connectivity."
+  (org-wiki-test-with-fixtures
+   (org-wiki-test--write-fixture
+    "sources/202607301000-source.org"
+    (replace-regexp-in-string
+     "^:ROAM_REFS:.*\n\\|^:RETRIEVED:.*\n\\|^- \\[\\[id:22222222.*\n" ""
+     org-wiki-test--health-source-node))
+   (org-wiki-test--write-fixture
+    "concepts/202607301001-concept.org"
+    (let ((text (replace-regexp-in-string "Concept" "Unknown"
+                                          org-wiki-test--health-concept-node)))
+      (setq text (string-replace
+                  "[[id:src-11111111-1111-4111-8111-111111111111]"
+                  "[[id:src-99999999-9999-4999-8999-999999999999]" text))
+      (string-replace "** Summary" "** No Summary" text)))
+   (let* ((report (org-wiki--health))
+          (codes (mapcar (lambda (issue) (plist-get issue :code))
+                         (append (plist-get report :issues) nil))))
+     (dolist (code '("broken_id_link" "invalid_kind" "missing_retrieved"
+                     "missing_roam_refs" "missing_summary" "orphan_node"
+                     "source_ids_mismatch" "source_without_links"
+                     "unreferenced_source"))
+       (should (member code codes))))))
+
+(ert-deftest org-wiki-test-health-detects-duplicate-ids ()
+  "Health reports a canonical heading ID used by two wiki nodes."
+  (org-wiki-test-with-fixtures
+   (org-wiki-test--write-fixture "concepts/one.org"
+                                 org-wiki-test--health-concept-node)
+   (org-wiki-test--write-fixture
+    "concepts/two.org"
+    (replace-regexp-in-string "Healthy Concept" "Duplicate Concept"
+                              org-wiki-test--health-concept-node))
+   (let ((codes (mapcar
+                 (lambda (issue) (plist-get issue :code))
+                 (append (plist-get (org-wiki--health) :issues) nil))))
+     (should (member "duplicate_id" codes)))))
+
+(ert-deftest org-wiki-test-health-mcp-tool-returns-json ()
+  "The read-only MCP health tool returns structured JSON."
+  (org-wiki-test-with-fixtures
+   (org-wiki-test--write-fixture "sources/source.org"
+                                 org-wiki-test--health-source-node)
+   (org-wiki-test--write-fixture "concepts/concept.org"
+                                 org-wiki-test--health-concept-node)
+   (let ((report (json-parse-string (org-wiki-mcp--health-tool)
+                                    :object-type 'alist)))
+     (should (equal (alist-get 'status report) "ok"))
+     (should (= (alist-get 'node-count report) 2))
+     (should (= (alist-get 'issue-count report) 0)))))
+
 ;;;; --- The org-ql property predicate ------------------------------
 
 (ert-deftest org-wiki-test-property-predicate-matches-existence ()
@@ -927,8 +1064,7 @@ Uses a unique server-id to avoid colliding with any existing tools."
           (should org-wiki-mcp--registered)
           (let ((tools-table (gethash org-wiki-mcp-server-id
                                       mcp-server-lib--tools)))
-            (should tools-table)
-            (should (= 4 (hash-table-count tools-table))))
+            (should (= 5 (hash-table-count tools-table))))
           (org-wiki-mcp-disable)
           (should-not org-wiki-mcp--registered)
           (let ((tools-table (gethash org-wiki-mcp-server-id

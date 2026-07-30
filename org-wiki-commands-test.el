@@ -170,6 +170,25 @@ outside the wiki tree, where `org-wiki--locate-id' cannot help."
        (should (string-match-p "Concept" text))
        (should-not (string-match-p "hash_" (downcase text)))))))
 
+(ert-deftest org-wiki-commands-test-health-report ()
+  "The health command renders deterministic issues in a special buffer."
+  (when (get-buffer "*org-wiki-health*")
+    (kill-buffer "*org-wiki-health*"))
+  (cl-letf (((symbol-function 'org-wiki--health)
+             (lambda ()
+               (list :status "issues" :node-count 2 :issue-count 1
+                     :issues
+                     (vector
+                      (list :code "missing_summary" :severity "warning"
+                            :title "Thin Node" :file "/tmp/thin.org"
+                            :detail "Summary section is empty or absent"))))))
+    (org-wiki-health)
+    (with-current-buffer "*org-wiki-health*"
+      (should (derived-mode-p 'special-mode))
+      (should (string-match-p "2 nodes, 1 issues" (buffer-string)))
+      (should (string-match-p "missing_summary.*Thin Node" (buffer-string)))
+      (should (string-match-p "/tmp/thin.org" (buffer-string))))))
+
 (ert-deftest org-wiki-commands-test-copy-link ()
   "The copy action puts a well-formed id: link on the kill-ring."
   (org-wiki-test-with-fixtures
@@ -217,7 +236,8 @@ actions are intentionally not autoloaded, so they are not checked."
                           (commandp 'org-wiki-find)
                           (commandp 'org-wiki-search)
                           (commandp 'org-wiki-backlinks)
-                          (commandp 'org-wiki-show-metadata))
+                          (commandp 'org-wiki-show-metadata)
+                          (commandp 'org-wiki-health))
                      0 1))))
     (unwind-protect
         (should (zerop (call-process
@@ -246,6 +266,10 @@ deferred `(autoload ... \\='keymap)' path."
   "RET in the embark node keymap defaults to the visit action."
   (should (eq (lookup-key org-wiki-node-map (kbd "RET"))
               #'org-wiki-embark-visit)))
+
+(ert-deftest org-wiki-commands-test-health-key ()
+  "The prefix map exposes deterministic health on h."
+  (should (eq (lookup-key org-wiki-command-map "h") #'org-wiki-health)))
 
 ;;;; --- embark seam -------------------------------------------------
 

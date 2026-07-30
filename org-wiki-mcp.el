@@ -46,6 +46,7 @@
 (require 'json)
 (require 'mcp-server-lib)
 (require 'org-wiki)
+(require 'org-wiki-health)
 
 (defgroup org-wiki-mcp nil
   "MCP tool registration for org-wiki."
@@ -194,6 +195,11 @@ MCP Parameters:
   (org-wiki-mcp--with-error-handling
     (json-encode (org-wiki--backlinks id))))
 
+(defun org-wiki-mcp--health-tool ()
+  "Return deterministic structural health diagnostics for the wiki."
+  (org-wiki-mcp--with-error-handling
+    (json-encode (org-wiki--health))))
+
 ;;;; --- Registration -----------------------------------------------
 
 (defconst org-wiki-mcp--tools
@@ -209,7 +215,11 @@ whole subtree with Org syntax preserved.")
 as JSON, with tool-maintained hash properties stripped.")
     ("wiki_backlinks" org-wiki-mcp--backlinks-tool
      "Return the nodes that link to the wiki node with the given :ID:, \
-via org-roam's backlink index."))
+via org-roam's backlink index.")
+    ("wiki_health" org-wiki-mcp--health-tool
+     "Return deterministic structural health diagnostics for all wiki \
+nodes: identity, canonical links, provenance and connectivity.  Makes no \
+LLM calls and modifies nothing."))
   "Tool registration spec: (TOOL-ID HANDLER-SYMBOL DESCRIPTION).
 The descriptions are hand-written summaries: per-parameter text lives
 in each handler's `MCP Parameters:' docstring block, which

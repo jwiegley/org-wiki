@@ -230,6 +230,20 @@ not load it."
       (should (equal (alist-get 'from-title (car results)) "T"))
       (should (equal (alist-get 'from-file (car results)) "/f.org")))))
 
+(ert-deftest org-wiki-gptel-test-health-tool ()
+  "Health returns a JSON object with a JSON array of issues."
+  (cl-letf (((symbol-function 'org-wiki--health)
+             (lambda ()
+               (list :status "issues" :node-count 1 :issue-count 1
+                     :issues (vector (list :code "missing_summary"))))))
+    (let* ((json (org-wiki-gptel--health))
+           (report (json-parse-string json :object-type 'alist
+                                      :array-type 'list)))
+      (should (equal (alist-get 'status report) "issues"))
+      (should (= (alist-get 'node-count report) 1))
+      (should (equal (alist-get 'code (car (alist-get 'issues report)))
+                     "missing_summary")))))
+
 (ert-deftest org-wiki-gptel-test-internal-error-returns-json ()
   "Unexpected errors come back as {error: internal_error, message}."
   (cl-letf (((symbol-function 'org-wiki--search)
@@ -242,7 +256,7 @@ not load it."
 ;;;; --- Registration (real gptel) --------------------------------------
 
 (ert-deftest org-wiki-gptel-test-register-tools-and-schema ()
-  "Registration produces four tools with the exact contract schema."
+  "Registration produces five tools with the exact contract schema."
   (skip-unless (locate-library "gptel"))
   (require 'gptel)
   (org-wiki-gptel-register)
@@ -267,13 +281,15 @@ not load it."
     (should (equal (plist-get k :name) "k"))
     (should (equal (plist-get k :type) "integer"))
     (should (plist-get k :optional)))
-  ;; The other three take a single required string id.
+  ;; Three tools take one required string id; health takes no arguments.
   (dolist (name '("wiki_read_node" "wiki_node_metadata" "wiki_backlinks"))
     (let ((args (gptel-tool-args (gptel-get-tool (list "org-wiki" name)))))
       (should (= (length args) 1))
       (should (equal (plist-get (car args) :name) "id"))
       (should (equal (plist-get (car args) :type) "string"))
-      (should-not (plist-get (car args) :optional)))))
+      (should-not (plist-get (car args) :optional))))
+  (should-not (gptel-tool-args
+               (gptel-get-tool '("org-wiki" "wiki_health")))))
 
 (ert-deftest org-wiki-gptel-test-register-idempotent ()
   "Re-registering leaves exactly one registry entry per tool name."
@@ -282,7 +298,7 @@ not load it."
   (org-wiki-gptel-register)
   (org-wiki-gptel-register)
   (let ((cat (cdr (assoc "org-wiki" gptel--known-tools))))
-    (should (= (length cat) 4))
+    (should (= (length cat) 5))
     (dolist (name org-wiki-gptel--tool-names)
       (should (= (cl-count name cat :key #'car :test #'equal) 1)))))
 
@@ -442,7 +458,7 @@ which goes out on the wire and 404s at the provider."
             (should (derived-mode-p 'org-mode))
             (should (string-match-p "^\\* What is content addressing\\?"
                                     (buffer-string)))
-            (should (= (length gptel-tools) 4))
+            (should (= (length gptel-tools) 5))
             (should gptel-use-tools)
             (should (local-variable-p 'gptel-model))
             (should (eq gptel-model 'global-model))
@@ -535,7 +551,7 @@ the kill in the echo area exactly once."
             ;; The preset sets no :model; the command pins one anyway.
             (should (local-variable-p 'gptel-model))
             (should (eq gptel-model 'global-model))
-            (should (= (length gptel-tools) 4))
+            (should (= (length gptel-tools) 5))
             (should (cl-every (lambda (tool)
                                 (member (gptel-tool-name tool)
                                         org-wiki-gptel--tool-names))

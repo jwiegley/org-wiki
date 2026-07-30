@@ -28,6 +28,7 @@
 (require 'cl-lib)
 (require 'org)
 (require 'org-wiki)
+(require 'org-wiki-health)
 
 (declare-function org-ql-select "org-ql")
 (declare-function consult--read "ext:consult")
@@ -239,6 +240,38 @@ properties are already stripped by `org-wiki-node-metadata'."
         (special-mode)
         (display-buffer (current-buffer))))))
 
+;;;###autoload
+(defun org-wiki-health ()
+  "Show a deterministic structural health report for the wiki.
+
+This checks identity, canonical links, provenance and connectivity without
+calling an LLM or modifying files."
+  (interactive)
+  (let* ((report (org-wiki--health))
+         (issues (append (plist-get report :issues) nil))
+         (buffer (get-buffer-create "*org-wiki-health*")))
+    (with-current-buffer buffer
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (insert (format "Wiki health: %d nodes, %d issues\n\n"
+                        (plist-get report :node-count)
+                        (plist-get report :issue-count)))
+        (if issues
+            (dolist (issue issues)
+              (insert (format "[%s] %s — %s\n  %s\n"
+                              (plist-get issue :severity)
+                              (plist-get issue :code)
+                              (or (plist-get issue :title) "<untitled>")
+                              (plist-get issue :detail)))
+              (when-let* ((file (plist-get issue :file)))
+                (insert (format "  %s\n" file)))
+              (insert "\n"))
+          (insert "No structural issues found.\n"))
+        (goto-char (point-min)))
+      (special-mode))
+    (display-buffer buffer)
+    report))
+
 ;;;; --- consult integration (optional) -----------------------------
 
 (defun org-wiki--consult-read (prompt cands alist)
@@ -415,6 +448,7 @@ see `org-wiki--embark-transform'."
     (define-key map "f" #'org-wiki-find)
     (define-key map "b" #'org-wiki-backlinks)
     (define-key map "m" #'org-wiki-show-metadata)
+    (define-key map "h" #'org-wiki-health)
     map)
   "Prefix keymap for org-wiki commands.
 The symbol also carries the keymap in its function cell (matching

@@ -16,8 +16,9 @@
 
 ;; In-Emacs LLM access to the wiki through gptel.  The org-wiki data
 ;; core answers directly — no MCP hop: the four read tools
-;; (wiki_search, wiki_read_node, wiki_node_metadata, wiki_backlinks)
-;; are registered as gptel tools whose functions call `org-wiki--search'
+;; core answers directly — no MCP hop: five read tools
+;; (wiki_search, wiki_read_node, wiki_node_metadata, wiki_backlinks,
+;; wiki_health) are registered as gptel tools whose functions call
 ;; and friends and return JSON strings, with errors RETURNED as JSON
 ;; objects (never signaled) so the model can recover mid-conversation.
 ;;
@@ -64,6 +65,7 @@
 (require 'json)
 (require 'org)
 (require 'org-wiki)
+(require 'org-wiki-health)
 
 ;; gptel is a soft dependency: nothing from it runs at load time, so
 ;; the byte-compile and check-declare gates stay green without it.
@@ -256,11 +258,16 @@ array is promised.  Vector-encoded for the same `json-encode'
 list-of-plists reason as `org-wiki-gptel--search'."
   (org-wiki-gptel--with-error-json
     (json-encode (vconcat (org-wiki--backlinks id)))))
+(defun org-wiki-gptel--health ()
+  "Return deterministic wiki health diagnostics as JSON."
+  (org-wiki-gptel--with-error-json
+    (json-encode (org-wiki--health))))
 
 ;;;; --- Registration --------------------------------------------------
 
 (defconst org-wiki-gptel--tool-names
-  '("wiki_search" "wiki_read_node" "wiki_node_metadata" "wiki_backlinks")
+  '("wiki_search" "wiki_read_node" "wiki_node_metadata" "wiki_backlinks"
+    "wiki_health")
   "Names of the wiki tools registered with gptel, in registry order.")
 
 ;;;###autoload
@@ -328,6 +335,14 @@ given :ID:, via org-roam's backlink index, as a JSON array of \
                      :type 'string
                      :description "The :ID: of the target wiki node; \
 returns the nodes that link to it."))
+   :category "org-wiki" :confirm nil :include nil)
+  (gptel-make-tool
+   :name "wiki_health"
+   :function #'org-wiki-gptel--health
+   :description "Return deterministic structural health diagnostics for \
+all wiki nodes: identity, canonical links, provenance and connectivity.  \
+Makes no LLM calls and modifies nothing."
+   :args nil
    :category "org-wiki" :confirm nil :include nil)
   (gptel-make-preset 'org-wiki
                      :description
